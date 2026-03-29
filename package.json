@@ -1,0 +1,22 @@
+{
+  "name": "polymarket-copy-trader",
+  "version": "7.0.0",
+  "type": "module",
+  "description": "Best Polymarket copy-trading bot — BUY+SELL, positions, P&L, risk guards, balance checks",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node src/test.js",
+    "simulate": "node src/simulate.js",
+    "positions": "node src/show-positions.js",
+    "portfolio": "node src/show-portfolio.js"
+  },
+  "dependencies": {
+    "@polymarket/clob-client": "^5",
+    "@ethersproject/wallet": "^5.7.0",
+    "ethers": "^5.7.2",
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
