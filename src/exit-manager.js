@@ -8,7 +8,7 @@
 //   - Time-based exit: stale positions eat capital — free it up
 //   - EV-based exit: exit near-extreme prices (tiny edge left)
 
-import { ClobClient, Side, OrderType } from '@polymarket/clob-client';
+import { Side, OrderType } from '@polymarket/clob-client';
 import config from './config.js';
 import { positions } from './positions.js';
 import { whaleTracker } from './whale-tracker.js';
