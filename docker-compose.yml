@@ -1,0 +1,10 @@
+version: "3.8"
+
+services:
+  trader:
+    build: .
+    container_name: poly-trader
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/app/data
