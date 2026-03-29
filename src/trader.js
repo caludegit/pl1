@@ -24,7 +24,7 @@ import {
     getMidpoint, getOrderBook, getExecutionPriceFromBook,
     getSpread, getBookDepth, getComplementaryToken,
     isMarketActive, passesMarketFilter, fetchBalance,
-    getMarketQuality, calcEdgeScore, cleanExpiredCache,
+    getMarketQuality, calcEdgeScore,
 } from './api.js';
 
 let client = null;
@@ -277,7 +277,7 @@ export async function placeCopyTrade(target, activity) {
 
 // ── Core execution (with all smart filters) ───────────────────────────────────
 async function _execute(target, activity) {
-    const { label } = target;
+    const { label, address: walletAddr } = target;
     const { conditionId, asset: tokenId, side, price, usdcSize, transactionHash, fillCount } = activity;
     const isBuy = side === 'BUY';
     const TAG = label;
@@ -521,6 +521,10 @@ async function _execute(target, activity) {
         // Success — update state
         _stampCooldown(target.address, tokenId);
 
+        // Save entry price BEFORE recordSell (which may delete the position)
+        const prePos = positions.getPosition(tokenId);
+        const savedAvgEntry = prePos?.avgEntry || 0;
+
         let pnl = 0;
         if (isBuy) {
             _recordSpend(amount);
@@ -549,10 +553,10 @@ async function _execute(target, activity) {
         log.notify('trade_filled', { label, side, market: name, amount, orderId, pnl, signalBoost, whaleMultiplier });
 
         // Record sell results for whale performance tracking
+        // Use savedAvgEntry captured before recordSell (position may be deleted after full exit)
         if (!isBuy && config.enableWhaleTracking) {
-            const pos = positions.getPosition(tokenId);
-            const entryPrice = pos?.avgEntry || price;
-            whaleTracker.recordTrade(target.address, {
+            const entryPrice = savedAvgEntry || price;
+            whaleTracker.recordTrade(walletAddr, {
                 tokenId, side, entryPrice, exitPrice: refPrice,
                 pnlPct: entryPrice > 0 ? (refPrice - entryPrice) / entryPrice : 0,
                 usdcPnl: pnl, market: name,
@@ -760,9 +764,22 @@ export async function dryRunCopyTrade(target, activity) {
         const estShares = mid > 0 ? amount / mid : amount;
         positions.recordBuy(tokenId, estShares, amount, { market: name, label });
     } else if (!isBuy && amount > 0) {
+        // Save entry price before recordSell (which may delete the position)
+        const prePos = positions.getPosition(tokenId);
+        const savedAvgEntry = prePos?.avgEntry || 0;
         const estUsdc = amount * mid;
         const pnl = positions.recordSell(tokenId, amount, estUsdc);
         if (pnl !== 0) log.info(TAG, `  Simulated P&L: $${pnl.toFixed(2)}`);
+
+        // Record whale performance in dry-run too (consistent with exit-manager)
+        if (config.enableWhaleTracking) {
+            const entryPrice = savedAvgEntry || price;
+            whaleTracker.recordTrade(wallet, {
+                tokenId, side, entryPrice, exitPrice: mid,
+                pnlPct: entryPrice > 0 ? (mid - entryPrice) / entryPrice : 0,
+                usdcPnl: pnl, market: name,
+            });
+        }
     }
 
     return { dryRun: true, side, amount, signalBoost };
