@@ -1,173 +1,561 @@
-# Polymarket Copy-Trader v7.0 -- Complete Guide
+# Polymarket Copy-Trader v7.0 — Complete Setup Guide (From Zero)
 
-## What This Bot Does
-
-This bot **automatically copies trades from profitable Polymarket whale wallets** in real-time. When a tracked whale buys or sells, the bot detects it on-chain within seconds and places the same trade on your behalf -- scaled to your risk tolerance.
-
-**v7.0 adds**: Whale performance tracking, Kelly criterion sizing, edge scoring, profit ratchet, time-based exits, EV-based exits, market quality filter, and anti-front-running.
-
-## Architecture
-
-```
-src/
-  index.js              Entry point -- wires everything, health monitoring
-  config.js             Config with env var support, per-target overrides
-  trader.js             Order execution -- BUY + SELL with smart filters + retry
-  monitor.js            On-chain OrderFilled listener (Polygon WSS)
-  api.js                REST API -- TTL cache, rate limiting, market analysis
-  positions.js          Position tracking, P&L, persistence, chain sync
-  exit-manager.js       Advanced auto-exit (stop-loss, take-profit, trailing, ratchet, time, EV)
-  stats.js              Runtime stats with persistence across restarts
-  logger.js             Structured logging, trade journal, webhooks
-  whale-tracker.js      Whale performance tracking & dynamic copy ratios
-  test.js               Connectivity & feature test suite
-  simulate.js           Offline simulation & validation (152 tests)
-  show-positions.js     CLI: view positions
-  show-portfolio.js     CLI: view portfolio with live P&L
-data/
-  positions.json        Auto-managed: position state
-  stats.json            Auto-managed: stats across restarts
-  health.json           Auto-managed: health check for monitoring
-  trades.jsonl          Auto-managed: trade journal (rotates at 10MB)
-  whale-tracker.json    Auto-managed: whale performance data
-```
-
-## Features
-
-| Feature | Description |
-|---------|-------------|
-| **Copy BUY + SELL** | Mirrors both buy and sell trades from target wallets |
-| **Smart Entry Filters** | Skip bad prices (buy too high, sell too low), wide spreads, thin books |
-| **Smart Order Routing** | Compare YES vs NO token fills, route to better price |
-| **Multi-Whale Signals** | Boost position size when 2+ whales buy the same market |
-| **Whale Performance Tracking** | Track each whale's win rate, P&L, and auto-adjust sizing |
-| **Kelly Criterion Sizing** | Mathematically optimal position sizes based on whale edge |
-| **Edge Scoring** | Composite score to filter low-quality trades |
-| **Market Quality Filter** | Skip low-volume/illiquid markets automatically |
-| **Anti-Front-Running** | Random delay before orders to prevent being sniped |
-| **Stop-Loss** | Cut losses at configurable threshold (default -20%) |
-| **Take-Profit** | Lock gains at configurable threshold (default +40%) |
-| **Trailing Stop-Loss** | Track high watermark, exit on pullback (default 12%) |
-| **Profit Ratchet** | Once up +15%, never go negative (breakeven floor) |
-| **Time-Based Exit** | Free capital from stale positions (72h no movement) |
-| **EV-Based Exit** | Exit near-extreme prices (>$0.95 or <$0.05) |
-| **Order Retry** | Automatically retry on transient network/API errors |
-| **Rate Limiting** | Built-in API rate limiter (8 req/s) prevents bans |
-| **3 Sell Modes** | `ratio`, `proportional`, `all` -- configurable per target |
-| **Position Tracking** | Cost basis, avg entry, realized P&L -- persisted to disk |
-| **Balance Checking** | Verifies USDC balance before buying |
-| **Risk Guards** | Daily cap, max positions, max per position, min balance reserve |
-| **GTC Limit Orders** | Optional better-price execution with timeout fallback |
-| **Chain Sync** | Reconciles local state with on-chain positions at boot |
-| **Health Monitoring** | `data/health.json` updated every 60s for external monitors |
-| **Webhook Alerts** | Slack/Discord notifications for trades, errors, P&L |
+This guide takes you from a blank machine to a running copy-trading bot, step by step.
 
 ---
 
-## Quick Start (5 Minutes)
+## Table of Contents
 
-### Step 1: Install
+1. [What This Bot Does](#1-what-this-bot-does)
+2. [Prerequisites](#2-prerequisites)
+3. [Get Your Keys](#3-get-your-keys)
+4. [Find Whale Wallets to Copy](#4-find-whale-wallets-to-copy)
+5. [Clone & Install](#5-clone--install)
+6. [Configure the Bot](#6-configure-the-bot)
+7. [Set Environment Variables](#7-set-environment-variables)
+8. [Test Everything](#8-test-everything)
+9. [Run the Bot](#9-run-the-bot)
+10. [Run with Docker (Recommended)](#10-run-with-docker-recommended)
+11. [Production Deployment](#11-production-deployment)
+12. [Monitor & Manage](#12-monitor--manage)
+13. [Configuration Reference](#13-configuration-reference)
+14. [Strategy Guide](#14-strategy-guide)
+15. [Troubleshooting](#15-troubleshooting)
+
+---
+
+## 1. What This Bot Does
+
+This bot **automatically copies trades from profitable Polymarket whale wallets** in real-time.
+
+When a tracked whale buys or sells on Polymarket, the bot:
+1. Detects the trade on-chain within seconds
+2. Runs it through smart filters (price, spread, liquidity, edge score)
+3. Calculates optimal position size (Kelly criterion + whale performance)
+4. Places the same trade on your behalf, scaled to your risk tolerance
+5. Auto-manages positions (stop-loss, take-profit, trailing stop)
+
+**You make money when the whales you copy make money.**
+
+---
+
+## 2. Prerequisites
+
+You need these before starting:
+
+| Requirement | Why | How to Get It |
+|-------------|-----|---------------|
+| **A computer or VPS** | Bot needs to run 24/7 | Any Linux VPS ($5/mo on DigitalOcean, Hetzner, etc.) |
+| **Node.js >= 18** | Runtime for the bot | See Step 5 below |
+| **OR Docker** | Easier deployment | See Step 10 below |
+| **A Polygon wallet** | To trade on Polymarket | MetaMask or any EVM wallet |
+| **USDC on Polygon** | Trading funds | Bridge from Ethereum or buy on Polygon |
+| **A Polygon WSS endpoint** | Real-time on-chain detection | Free from Alchemy (see Step 3) |
+| **Whale wallet addresses** | Who to copy | See Step 4 |
+
+---
+
+## 3. Get Your Keys
+
+You need two keys to run the bot.
+
+### 3A. Polygon Wallet Private Key
+
+This is the wallet that will execute trades on Polymarket.
+
+> **IMPORTANT: Use a DEDICATED wallet. Never use your main wallet.**
+
+1. Open MetaMask (or any EVM wallet)
+2. Create a **new account** specifically for this bot
+3. Switch to the **Polygon** network
+4. Fund it with **USDC on Polygon** (start with $50–100)
+5. Export the private key:
+   - MetaMask → click the 3 dots → Account details → Show private key
+   - It looks like: `0x4c0883a6910395b1e8ce...` (64 hex characters after 0x)
+
+> Make sure your wallet has been **approved on Polymarket** first. Go to [polymarket.com](https://polymarket.com), connect this wallet, and complete any approval prompts.
+
+### 3B. Polygon WebSocket (WSS) Endpoint
+
+This lets the bot listen to real-time on-chain events.
+
+1. Go to [alchemy.com](https://www.alchemy.com/) and create a free account
+2. Click **"Create App"**
+3. Choose:
+   - Chain: **Polygon**
+   - Network: **Polygon Mainnet**
+4. Once created, click the app → **"API Key"**
+5. Copy the **WebSocket** URL (not HTTPS)
+   - It looks like: `wss://polygon-mainnet.g.alchemy.com/v2/AbCdEf123456`
+
+> Free tier gives 300M compute units/month — more than enough.
+
+---
+
+## 4. Find Whale Wallets to Copy
+
+This is the **most important step**. Your profits depend on copying the right people.
+
+### Method A: Polymarket Leaderboard (Easiest)
+
+1. Go to [polymarket.com/leaderboard](https://polymarket.com/leaderboard)
+2. Sort by **"Profit"** (not volume — volume doesn't mean profitable)
+3. Click on top traders → view their trade history
+4. Copy their **wallet address** (starts with `0x...`)
+
+### Method B: On-Chain Analysis (Advanced)
+
+1. Go to [polygonscan.com](https://polygonscan.com)
+2. Look at the Polymarket CTF Exchange contract: `0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E`
+3. Filter for large trades (>$1000)
+4. Track wallets that consistently profit
+
+### Method C: Social / Community
+
+1. Follow Polymarket traders on Twitter/X
+2. Look for wallets shared in trading communities
+3. Some traders post their wallets publicly
+
+### What Makes a Good Whale
+
+| Metric | Good | Bad |
+|--------|------|-----|
+| Win rate | >60% | <50% |
+| Avg profit/trade | +10–30% | Huge losses mixed in |
+| Trade frequency | 5–20/week | <1/week or 100+/day |
+| Market diversity | Many markets | Only one niche |
+| Hold time | Hours to days | Seconds (bots) or months |
+
+> **Tip**: Start with 3–5 whales. The bot's whale tracker will automatically learn which ones are profitable and adjust sizing.
+
+---
+
+## 5. Clone & Install
+
+### Option A: Run Directly with Node.js
 
 ```bash
-git clone <your-repo-url> && cd pm
+# Install Node.js 20 (if not installed)
+# Ubuntu/Debian:
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo bash -
+sudo apt install -y nodejs
+
+# macOS:
+brew install node@20
+
+# Verify
+node --version   # should be >= 18
+```
+
+```bash
+# Clone the repo
+git clone https://github.com/caludegit/pl1.git
+cd pl1
+
+# Install dependencies
 npm install
 ```
 
-Requires **Node.js >= 18**.
+### Option B: Use Docker (skip to Step 10)
 
-### Step 2: Get Your Keys
+If you prefer Docker, skip ahead to [Step 10](#10-run-with-docker-recommended). You don't need Node.js installed locally.
 
-You need two things:
+---
 
-1. **Polygon Wallet Private Key** -- the wallet that will trade on Polymarket
-   - Use a **dedicated trading wallet** (NOT your main wallet)
-   - Fund it with USDC on Polygon
-   - Export the private key from MetaMask or your wallet
+## 6. Configure the Bot
 
-2. **Polygon WSS Endpoint** -- for real-time on-chain event detection
-   - Sign up at [Alchemy](https://www.alchemy.com/) (free tier works)
-   - Create a Polygon app, copy the WebSocket URL
-   - Looks like: `wss://polygon-mainnet.g.alchemy.com/v2/YOUR_KEY`
+Edit `src/config.js` to add your whale targets:
 
-### Step 3: Find Whale Wallets to Copy
+```bash
+nano src/config.js    # or use any text editor
+```
 
-This is the most important step. See **"Strategy Guide"** section below.
-
-### Step 4: Configure
-
-Edit `src/config.js` and add your target wallets:
+Find the `targets: []` array (around line 125) and add your whales:
 
 ```js
 targets: [
     {
-        address:   '0x1234...abcd',   // whale wallet address (lowercase)
+        address:   '0x1234567890abcdef1234567890abcdef12345678',  // whale wallet (lowercase!)
         label:     'Whale-Alpha',      // friendly name for logs
-        copyRatio: 0.05,               // copy 5% of their trade size
-        maxUsdc:   25,                 // max $25 per trade
+        copyRatio: 0.05,               // copy 5% of whale's trade size
+        maxUsdc:   25,                 // max $25 per trade from this whale
         sellMode:  'all',              // full exit when they sell
     },
+    {
+        address:   '0xabcdef1234567890abcdef1234567890abcdef12',
+        label:     'Whale-Beta',
+        copyRatio: 0.03,
+        maxUsdc:   15,
+        sellMode:  'all',
+    },
+    // Add more whales here...
 ],
 ```
 
-### Step 5: Set Environment Variables
+### Target Fields Explained
 
-```bash
-export PRIVATE_KEY=0xYourPrivateKey
-export WSS_URL=wss://polygon-mainnet.g.alchemy.com/v2/YOUR_KEY
+| Field | Required | Description |
+|-------|----------|-------------|
+| `address` | Yes | Whale's wallet address, **must be lowercase** |
+| `label` | Yes | Name shown in logs (any string) |
+| `copyRatio` | Yes | Fraction of whale's trade size to copy (0.05 = 5%) |
+| `maxUsdc` | Yes | Max $ per trade from this whale |
+| `sellMode` | No | `'all'` (default), `'ratio'`, or `'proportional'` |
+| `copySells` | No | Override global copySells for this whale |
+
+### Other Config You Might Want to Change
+
+Most defaults are good, but consider adjusting these:
+
+```js
+// Risk controls — adjust to your budget
+maxDailyUsdc:      100,      // total daily spend cap (lower if small budget)
+maxOpenPositions:  10,       // max positions at once
+maxPositionUsdc:   50,       // max per single position
+minBalanceUsdc:    20,       // stop buying if balance drops below this
+
+// Auto-exit — the defaults are solid, but you can tighten them
+stopLossPct:       -0.20,   // exit at -20% loss (use -0.15 for tighter)
+takeProfitPct:     0.40,    // exit at +40% profit
+trailingStopPct:   0.12,    // trailing stop at 12% pullback
 ```
 
-Or fill them in `start.sh`.
+> **Don't change the smart filters** (`maxBuyPrice`, `minSellPrice`, `maxSpreadPct`) unless you really know what you're doing. They protect you from bad trades.
 
-Optional environment variables:
+---
 
-| Variable | Description |
-|----------|-------------|
-| `PRIVATE_KEY` | Trading wallet private key (required for live mode) |
-| `WSS_URL` | Polygon WebSocket endpoint (recommended for real-time) |
-| `RPC_URL` | HTTP RPC fallback (default: `https://polygon-rpc.com`) |
-| `LIVE_MODE` | Set to `1` for live trading (default: dry-run) |
-| `WEBHOOK_URL` | Slack/Discord webhook URL (optional) |
-| `TEST_ADDRESS` | Wallet address for `npm test` API checks |
-| `FUNDER_ADDRESS` | For proxy/Smart wallets only |
-| `SIGNATURE_TYPE` | `0`=EOA (default), `1`=Magic, `2`=Safe |
+## 7. Set Environment Variables
 
-### Step 6: Validate Logic (Offline)
+### Option A: Export in Terminal
+
+```bash
+export PRIVATE_KEY=0xYourPrivateKeyHere
+export WSS_URL=wss://polygon-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_KEY
+```
+
+### Option B: Use a .env File (Recommended)
+
+```bash
+# Copy the example
+cp .env.example .env
+
+# Edit with your real values
+nano .env
+```
+
+Fill in your `.env`:
+
+```bash
+# ── Required ──────────────────────────────────────────────
+PRIVATE_KEY=0xYourPrivateKeyHere
+WSS_URL=wss://polygon-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_KEY
+
+# ── Optional ──────────────────────────────────────────────
+# RPC_URL=https://polygon-rpc.com
+# LIVE_MODE=1
+# WEBHOOK_URL=https://hooks.slack.com/services/xxx/yyy/zzz
+# TEST_ADDRESS=0xSomeWhaleAddress
+```
+
+### All Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `PRIVATE_KEY` | Yes (live mode) | Your trading wallet private key |
+| `WSS_URL` | Recommended | Polygon WebSocket URL (real-time detection) |
+| `RPC_URL` | No | HTTP RPC fallback (default: `https://polygon-rpc.com`) |
+| `LIVE_MODE` | No | Set to `1` for live trading. Default: dry-run |
+| `WEBHOOK_URL` | No | Slack/Discord webhook for trade alerts |
+| `TEST_ADDRESS` | No | Wallet address for `npm test` checks |
+| `FUNDER_ADDRESS` | No | For proxy/smart wallets only |
+| `SIGNATURE_TYPE` | No | `0`=EOA (default), `1`=Magic, `2`=Safe |
+
+> **NEVER commit your `.env` file.** It's in `.gitignore` already.
+
+---
+
+## 8. Test Everything
+
+Run these in order before going live:
+
+### Step 8A: Offline Logic Tests (No Keys Needed)
 
 ```bash
 npm run simulate
 ```
 
-Runs 152 offline tests covering position math, filters, exits, whale tracking, and more. **No network or keys needed.**
+Runs 152 offline tests — position math, filters, exits, whale tracking. Everything should pass.
 
-### Step 7: Test Connectivity
+### Step 8B: Connectivity Test
 
 ```bash
 npm test
 ```
 
-Tests RPC connectivity, API access, position tracking, and order book analysis. Needs at least `RPC_URL` and optionally `TEST_ADDRESS`.
+Tests RPC connection, Polymarket API access, and order book analysis. Needs `RPC_URL` or `WSS_URL`.
 
-### Step 8: Run in Dry-Run Mode First
+### Step 8C: Dry-Run (Watch Mode)
 
 ```bash
 npm start
 ```
 
-This runs in **dry-run mode** -- it will detect whale trades and simulate copies without spending real money. Watch for a few hours or days to verify it's working correctly.
+Starts in **dry-run mode** — detects whale trades and simulates copies **without spending real money**. Watch the logs:
 
-### Step 9: Go Live
+- `[BUY-DRY]` = would have bought
+- `[SELL-DRY]` = would have sold
+- `[SKIP]` = filtered out (with reason)
+
+> **Run dry-run for at least a few hours** (ideally 1–2 days) to verify it's detecting trades and the filters make sense.
+
+---
+
+## 9. Run the Bot (Without Docker)
+
+### Dry-Run Mode (Default)
 
 ```bash
-# Option A: via start.sh
-./start.sh live
+npm start
+```
 
-# Option B: via env var
-LIVE_MODE=1 PRIVATE_KEY=0x... WSS_URL=wss://... node src/index.js
+### Live Mode
+
+```bash
+LIVE_MODE=1 npm start
+```
+
+Or if using `.env`, add `LIVE_MODE=1` to your `.env` file, then:
+
+```bash
+npm start
+```
+
+### Keep It Running with PM2
+
+```bash
+# Install PM2
+npm install -g pm2
+
+# Start the bot
+pm2 start src/index.js --name poly-trader
+
+# Auto-restart on reboot
+pm2 startup
+pm2 save
+
+# View logs
+pm2 logs poly-trader
+
+# Print stats
+pm2 sendSignal SIGUSR2 poly-trader
+
+# Stop
+pm2 stop poly-trader
 ```
 
 ---
 
-## Configuration Reference
+## 10. Run with Docker (Recommended)
+
+Docker is the easiest way to deploy. You don't need Node.js installed.
+
+### Step 10A: Install Docker
+
+```bash
+# Ubuntu/Debian
+curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker $USER
+# Log out and back in, then verify:
+docker --version
+
+# macOS: install Docker Desktop from https://docker.com
+```
+
+### Step 10B: Create Your .env File
+
+```bash
+cp .env.example .env
+nano .env
+# Fill in PRIVATE_KEY and WSS_URL (see Step 7)
+```
+
+### Step 10C: Configure Targets
+
+Edit `src/config.js` and add whale addresses (see Step 6).
+
+### Step 10D: Build & Run
+
+```bash
+# Build the image
+docker compose build
+
+# Run in dry-run mode (default)
+docker compose up -d
+
+# View logs
+docker compose logs -f
+
+# Stop
+docker compose down
+```
+
+### Step 10E: Go Live
+
+Add `LIVE_MODE=1` to your `.env` file, then:
+
+```bash
+docker compose down
+docker compose up -d
+```
+
+### Docker Commands Reference
+
+```bash
+# Build
+docker compose build
+
+# Start (background)
+docker compose up -d
+
+# View live logs
+docker compose logs -f
+
+# Stop
+docker compose down
+
+# Restart
+docker compose restart
+
+# Print stats (send SIGUSR2)
+docker kill --signal=SIGUSR2 poly-trader
+
+# Toggle dry-run at runtime (send SIGUSR1)
+docker kill --signal=SIGUSR1 poly-trader
+
+# Shell into container
+docker exec -it poly-trader sh
+
+# View positions file
+cat data/positions.json | jq .
+
+# Rebuild after config changes
+docker compose down && docker compose build && docker compose up -d
+```
+
+### Data Persistence
+
+The `data/` folder is mounted as a Docker volume, so all state (positions, stats, whale tracker) survives container restarts:
+
+```
+data/
+  positions.json        # your open positions
+  stats.json            # trade statistics
+  health.json           # health check (updated every 60s)
+  trades.jsonl          # trade journal
+  whale-tracker.json    # whale performance data
+```
+
+---
+
+## 11. Production Deployment
+
+### Recommended VPS Setup
+
+1. Get a **$5–10/mo VPS** (DigitalOcean, Hetzner, Vultr) — pick a region close to Polygon nodes (US East or EU)
+2. SSH in and install Docker (Step 10A)
+3. Clone the repo, configure, and run with Docker
+
+### Webhook Alerts (Slack / Discord)
+
+Get notified on every trade:
+
+1. **Slack**: Create an [Incoming Webhook](https://api.slack.com/messaging/webhooks) → copy the URL
+2. **Discord**: Server Settings → Integrations → Webhooks → New Webhook → copy the URL
+3. Add to `.env`:
+   ```
+   WEBHOOK_URL=https://hooks.slack.com/services/xxx/yyy/zzz
+   ```
+
+### Health Monitoring
+
+The bot writes `data/health.json` every 60 seconds:
+
+```json
+{
+  "alive": true,
+  "uptime": "2h 15m",
+  "events": 42,
+  "filled": 8,
+  "positions": 5,
+  "dryRun": false,
+  "ts": "2026-03-29T12:00:00.000Z"
+}
+```
+
+Use any uptime monitor (UptimeRobot, Healthchecks.io) to check this file.
+
+### systemd Alternative (No Docker)
+
+```ini
+[Unit]
+Description=Polymarket Copy Trader v7.0
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/pl1
+EnvironmentFile=/home/ubuntu/pl1/.env
+ExecStart=/usr/bin/node src/index.js
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo cp poly-trader.service /etc/systemd/system/
+sudo systemctl enable poly-trader
+sudo systemctl start poly-trader
+sudo journalctl -u poly-trader -f
+```
+
+---
+
+## 12. Monitor & Manage
+
+### Daily Routine
+
+```bash
+# Check portfolio & P&L
+npm run portfolio
+# or with Docker:
+docker exec poly-trader node src/show-portfolio.js
+
+# Check positions
+npm run positions
+# or:
+docker exec poly-trader node src/show-positions.js
+```
+
+### Runtime Signals
+
+| Signal | What It Does |
+|--------|-------------|
+| `Ctrl+C` | Graceful shutdown (saves all state) |
+| `kill -USR1 <pid>` | Toggle dry-run on/off |
+| `kill -USR2 <pid>` | Print stats + positions + portfolio |
+
+Docker equivalents:
+```bash
+docker kill --signal=SIGUSR1 poly-trader   # toggle dry-run
+docker kill --signal=SIGUSR2 poly-trader   # print stats
+```
+
+---
+
+## 13. Configuration Reference
 
 ### Core Trading
 
@@ -177,405 +565,166 @@ LIVE_MODE=1 PRIVATE_KEY=0x... WSS_URL=wss://... node src/index.js
 | `maxPriceDrift` | 0.10 (10%) | Skip if market moved >10% since whale's fill |
 | `cooldownMs` | 30000 (30s) | Min time between copies of same token+wallet |
 | `minOrderUsdc` | 1 | Skip trades below $1 |
-| `txBatchWindowMs` | 400 | Wait for partial fills in same tx |
-| `dryRun` | true | Set `LIVE_MODE=1` to trade |
+| `dryRun` | true | Set `LIVE_MODE=1` to trade for real |
 
-### Smart Filters (KEY TO PROFITABILITY)
+### Smart Filters (Don't Disable These)
 
-| Parameter | Default | Why It Makes Money |
-|-----------|---------|-------------------|
-| `maxBuyPrice` | 0.92 | Don't buy above $0.92 -- only 8c upside, huge downside |
-| `minSellPrice` | 0.08 | Don't sell below $0.08 -- hold for potential recovery |
-| `maxSpreadPct` | 0.08 (8%) | Skip illiquid markets with wide spreads (bad fills) |
-| `minBookDepthUsdc` | 50 | Skip if order book side has < $50 depth |
-| `useSmartRouting` | true | Compare YES vs NO token for better fill |
+| Parameter | Default | Why It Matters |
+|-----------|---------|----------------|
+| `maxBuyPrice` | 0.92 | Don't buy above $0.92 — only 8c upside, 92c downside |
+| `minSellPrice` | 0.08 | Don't panic-sell at $0.08 — hold for recovery |
+| `maxSpreadPct` | 0.08 | Skip illiquid markets (wide spread = bad fills) |
+| `minBookDepthUsdc` | 50 | Skip if order book too thin |
+| `useSmartRouting` | true | Compare YES vs NO token for best fill |
 
-### Auto-Exit (CRITICAL FOR PROFITS)
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `enableAutoExit` | true | Auto-manage positions |
-| `stopLossPct` | -0.20 (-20%) | Exit if position is down 20% |
-| `takeProfitPct` | 0.40 (+40%) | Exit if position is up 40% |
-| `enableTrailingStop` | true | Track high watermark, exit on pullback |
-| `trailingStopPct` | 0.12 (12%) | Exit if price drops 12% from its high |
-| `exitCheckIntervalMs` | 30000 (30s) | How often to check positions |
-
-### Profit Ratchet (NEW in v7.0)
+### Auto-Exit
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `enableProfitRatchet` | true | Once in profit past threshold, never go negative |
-| `ratchetThreshold` | 0.15 (+15%) | Activate ratchet at this profit level |
-| `ratchetFloor` | 0.02 (+2%) | Minimum locked-in profit once ratchet activates |
-
-### Time-Based Exit (NEW in v7.0)
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `enableTimeExit` | true | Exit stale positions that aren't moving |
-| `timeExitHours` | 72 | Exit if position hasn't moved in 72 hours |
-| `timeExitMinMovePct` | 0.05 (5%) | Threshold for "hasn't moved" |
-
-### EV-Based Exit (NEW in v7.0)
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `enableEvExit` | true | Exit near-extreme prices (low expected value) |
-| `evExitMaxPrice` | 0.95 | Sell if price >$0.95 (tiny upside left) |
-| `evExitMinPrice` | 0.05 | Sell if price <$0.05 (likely total loss) |
-
-### Whale Performance Tracking (NEW in v7.0)
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `enableWhaleTracking` | true | Track each whale's win rate, auto-adjust copy sizing |
-| `whaleTrackWindowMs` | 30 days | Rolling performance evaluation window |
-| `whaleMinTrades` | 5 | Min trades before adjusting copy ratio |
-| `whaleMinMultiplier` | 0.1 | Floor: never completely stop copying a whale |
-| `whaleMaxMultiplier` | 3.0 | Ceiling: never exceed 3x base copy ratio |
-| `enableKellySizing` | true | Use Kelly criterion for optimal position sizing |
-
-### Edge Scoring (NEW in v7.0)
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `enableEdgeFilter` | true | Only copy trades with positive expected edge |
-| `minEdgeScore` | 0.3 | 0-1 scale, higher = more selective |
-
-### Market Quality Filter (NEW in v7.0)
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `enableMarketQuality` | true | Skip low-quality markets automatically |
-| `minMarketVolume` | 5000 | Skip markets with <$5000 total volume |
-
-### Anti-Front-Running (NEW in v7.0)
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `enableAntiSnipe` | true | Add random delay before placing orders |
-| `antiSnipeMaxMs` | 1500 | Random 0-1500ms delay |
+| `enableAutoExit` | true | Auto-manage all positions |
+| `stopLossPct` | -0.20 | Exit at -20% loss |
+| `takeProfitPct` | 0.40 | Exit at +40% profit |
+| `enableTrailingStop` | true | Track high, exit on pullback |
+| `trailingStopPct` | 0.12 | Exit if price drops 12% from high |
+| `enableProfitRatchet` | true | Once +15%, never go negative |
+| `enableTimeExit` | true | Exit stale positions after 72h |
+| `enableEvExit` | true | Exit near-extreme prices |
 
 ### Risk Controls
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `maxDailyUsdc` | 100 | Daily BUY spend cap |
+| `maxDailyUsdc` | 100 | Daily spend cap |
 | `maxOpenPositions` | 10 | Max concurrent positions |
-| `maxPositionUsdc` | 50 | Max cost basis per position |
-| `minBalanceUsdc` | 20 | Stop buying if USDC < this |
+| `maxPositionUsdc` | 50 | Max per position |
+| `minBalanceUsdc` | 20 | Reserve — stop buying below this |
 
 ### Order Execution
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `orderMode` | 'fak' | 'fak' = instant, 'gtc' = limit order for better price |
-| `gtcOffsetPct` | 0.01 | 1% inside the spread for GTC orders |
-| `gtcTimeoutMs` | 15000 | Cancel unfilled GTC after 15s, fall back to FAK |
-
-### Signal Detection
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `signalWindowMs` | 300000 (5m) | Time window to detect whale convergence |
-| `signalBoostRatio` | 1.5 | Multiply size by 1.5x when 2+ whales agree |
-| `signalMaxBoost` | 3.0 | Cap the boost multiplier |
+| `orderMode` | 'fak' | `'fak'` = instant fill, `'gtc'` = limit order |
+| `gtcOffsetPct` | 0.01 | 1% inside spread for GTC orders |
+| `gtcTimeoutMs` | 15000 | Cancel unfilled GTC after 15s |
 
 ### Sell Configuration
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `copySells` | true | Copy target sell trades |
-| `sellMode` | 'all' | `all`=full exit, `ratio`=same ratio as buy, `proportional`=match whale's fraction |
+| `copySells` | true | Copy whale sell trades |
+| `sellMode` | 'all' | `'all'`, `'ratio'`, or `'proportional'` |
 | `sellOnlyIfHeld` | true | Skip sell if we don't hold the token |
 
-### Market Filters
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `marketBlocklist` | [] | Keywords to block (e.g., `['meme', 'celebrity']`) |
-| `marketAllowlist` | [] | If set, ONLY trade markets matching these keywords |
-
 ---
 
-## Runtime Commands
+## 14. Strategy Guide
 
-| Command | Description |
-|---------|-------------|
-| `npm start` | Start bot (dry-run by default) |
-| `npm test` | Test connectivity and API access |
-| `npm run simulate` | Run 152 offline logic tests (no keys needed) |
-| `npm run positions` | View current holdings |
-| `npm run portfolio` | View portfolio with live P&L |
-| `./start.sh` | Start in dry-run mode |
-| `./start.sh live` | Start in LIVE mode |
-| `./start.sh test` | Run connectivity tests |
-| `kill -USR1 <pid>` | Toggle dryRun on/off at runtime |
-| `kill -USR2 <pid>` | Print stats + positions + portfolio to console |
-| `Ctrl+C` | Graceful shutdown (saves all state) |
+### Beginner (Start Here)
 
----
-
-## How It Works (Flow)
-
-1. **Boot** (`index.js`): Validates config, loads saved state (positions, stats, whale data), initializes CLOB client, syncs positions from chain
-2. **Monitor** (`monitor.js`): Subscribes to Polygon `OrderFilled` events via WebSocket for all target wallets. Batches partial fills from the same transaction
-3. **Detect**: When a target whale's trade is detected, the callback fires with trade details (token, side, size, price)
-4. **Filter** (`trader.js`): The trade passes through multiple smart filters:
-   - Cooldown check (same wallet+token)
-   - Max positions limit
-   - Market active/closed check
-   - Market quality score
-   - Price filter (maxBuyPrice / minSellPrice)
-   - Spread filter (maxSpreadPct)
-   - Book depth filter (minBookDepthUsdc)
-   - Edge score filter (composite quality score)
-   - Daily spend limit
-   - Balance check
-5. **Size**: Calculate order size using copyRatio, signal boost (multi-whale), whale performance multiplier, and Kelly criterion
-6. **Route**: Smart routing compares direct token vs complementary token (YES/NO) for better fill
-7. **Execute**: Place order via Polymarket CLOB API (FAK or GTC mode)
-8. **Track**: Update positions, stats, whale tracker, and trade journal
-9. **Manage** (`exit-manager.js`): Every 30 seconds, evaluate all positions for:
-   - Stop-loss (-20%)
-   - Take-profit (+40%)
-   - Trailing stop (12% from high)
-   - Profit ratchet (lock breakeven after +15%)
-   - Time exit (72h stale)
-   - EV exit (price >$0.95 or <$0.05)
-
----
-
-## Strategy Guide: How to Find Profitable Whales
-
-### The Copy Trading Edge
-
-Copy trading works because:
-- **Information asymmetry**: Whales often have better research, models, or insider knowledge
-- **Speed**: They trade before the market moves; you piggyback on their alpha
-- **Risk management**: The bot's filters protect you from their bad trades
-- **v7.0 whale tracking**: The bot automatically learns which whales are profitable and copies them more
-
-### Step 1: Find Whale Wallets
-
-**Method A: Polymarket Leaderboard**
-1. Go to [polymarket.com/leaderboard](https://polymarket.com/leaderboard)
-2. Sort by "Profit" or "Volume"
-3. Click on top traders to see their trade history
-4. Copy their wallet addresses
-
-**Method B: On-Chain Analysis**
-1. Use [Polygonscan](https://polygonscan.com)
-2. Look at the Polymarket CTF Exchange contract: `0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E`
-3. Filter for large trades (>$1000 USDC)
-4. Track wallets that consistently profit
-
-**Method C: Social Research**
-1. Follow Polymarket traders on Twitter/X
-2. Some post their trades publicly
-3. Look for wallets mentioned in trading communities
-
-### Step 2: Evaluate Whale Quality
-
-Not all whales are worth copying. Look for:
-
-| Metric | Good Sign | Bad Sign |
-|--------|-----------|----------|
-| Win rate | >60% of positions profitable | <50% win rate |
-| Avg profit per trade | Consistent +10-30% returns | Huge variance, many -50% losses |
-| Trade frequency | 5-20 trades/week | Too rare (<1/week) or too frequent (100+/day) |
-| Market type | Diverse markets | Only one niche (could be lucky) |
-| Position sizing | Consistent sizing | Erratic, YOLO bets |
-| Hold time | Hours to days | Seconds (bots) or months (illiquid) |
-
-### Step 3: Recommended Configuration by Strategy
-
-**Conservative (Recommended for Beginners)**
 ```js
+// In src/config.js:
 copyRatio: 0.02,           // 2% of whale's size
 maxUsdc: 10,               // $10 max per trade
 maxDailyUsdc: 50,          // $50/day max
 maxOpenPositions: 5,
-stopLossPct: -0.15,        // tight stop loss
-takeProfitPct: 0.30,       // take profits early
-trailingStopPct: 0.10,     // tight trailing stop
 ```
 
-**Moderate**
+Fund wallet with **$50–100 USDC**. Run dry-run for 2 days, then go live.
+
+### Moderate (After 2+ Weeks of Profit)
+
 ```js
-copyRatio: 0.05,           // 5% of whale's size
-maxUsdc: 25,               // $25 max per trade
+copyRatio: 0.05,
+maxUsdc: 25,
 maxDailyUsdc: 100,
 maxOpenPositions: 10,
-stopLossPct: -0.20,        // default
-takeProfitPct: 0.40,       // default
-trailingStopPct: 0.12,     // default
 ```
 
-**Aggressive (Only with Proven Whales)**
+### Aggressive (Only with Proven Whales)
+
 ```js
-copyRatio: 0.10,           // 10% of whale's size
-maxUsdc: 50,               // $50 max per trade
+copyRatio: 0.10,
+maxUsdc: 50,
 maxDailyUsdc: 200,
 maxOpenPositions: 15,
-stopLossPct: -0.30,
-takeProfitPct: 0.75,
-trailingStopPct: 0.20,
 ```
 
-### Step 4: Multi-Whale Strategy (Best Approach)
+### Multi-Whale Strategy (Best Approach)
 
-Track 3-5 whales with different strengths:
+Track 3–5 whales with different copy ratios:
 
 ```js
 targets: [
-    {
-        address: '0x...', label: 'Leaderboard-Top5',
-        copyRatio: 0.05, maxUsdc: 25,
-        sellMode: 'all',
-    },
-    {
-        address: '0x...', label: 'News-Trader',
-        copyRatio: 0.03, maxUsdc: 15,
-        sellMode: 'all',
-    },
-    {
-        address: '0x...', label: 'High-Volume',
-        copyRatio: 0.02, maxUsdc: 10,
-        sellMode: 'ratio', copySells: true,
-    },
-]
+    { address: '0x...', label: 'Top-Earner',   copyRatio: 0.05, maxUsdc: 25, sellMode: 'all' },
+    { address: '0x...', label: 'News-Trader',   copyRatio: 0.03, maxUsdc: 15, sellMode: 'all' },
+    { address: '0x...', label: 'High-Volume',   copyRatio: 0.02, maxUsdc: 10, sellMode: 'ratio' },
+],
 ```
 
-The bot's **signal boost** feature automatically increases position size when 2+ whales buy the same market (strong consensus signal).
-
-With **whale tracking** enabled (default), the bot automatically learns which whales are profitable over time and adjusts copy ratios accordingly -- copying more from winners and less from losers.
+The bot automatically:
+- **Boosts** size when 2+ whales buy the same market (signal convergence)
+- **Tracks** each whale's win rate and adjusts copy ratio over time (whale tracker)
+- **Sizes** positions using Kelly criterion for mathematically optimal bets
 
 ---
 
-## Key Profit Principles
+## 15. Troubleshooting
 
-### 1. The Filters Are Everything
-The smart filters (maxBuyPrice, minSellPrice, spread, depth) prevent you from entering bad trades. **Do not disable them.**
-
-- `maxBuyPrice: 0.92` means you never buy a YES token above $0.92. At $0.92 you can only gain 8 cents but could lose 92 cents. Bad risk/reward.
-- `minSellPrice: 0.08` means you don't panic-sell at the bottom. A token at $0.08 can only lose 8 more cents -- might as well hold.
-- `maxSpreadPct: 0.08` means you skip markets where the bid-ask spread is >8%. Wide spreads = illiquid = bad fills = losses.
-
-### 2. Stop Losses Are Mandatory
-Without stop losses, one bad trade can wipe out 10 good ones. The trailing stop is even better -- it lets winners run while protecting profits. The profit ratchet (v7.0) ensures that once you're up +15%, you'll never go negative.
-
-### 3. Diversify Across Whales
-Don't copy just one wallet. They might have one lucky streak then lose everything. 3-5 wallets across different market types is ideal. Whale tracking will auto-adjust.
-
-### 4. Start Small, Scale Up
-Begin with $50-100 total budget, `copyRatio: 0.02`, and dry-run mode. Only increase after 2+ weeks of consistent profits.
-
-### 5. Monitor Daily
-Run `npm run portfolio` daily. Check which whales are profitable and which aren't. Remove underperforming whales (or let whale tracking auto-dampen them).
-
----
-
-## Production Deployment
-
-### PM2 (Recommended)
-```bash
-npm install -g pm2
-pm2 start src/index.js --name poly-trader
-pm2 startup && pm2 save
-pm2 logs poly-trader
-pm2 sendSignal SIGUSR2 poly-trader   # print stats
-```
-
-### systemd
-```ini
-[Unit]
-Description=Polymarket Copy Trader v7.0
-After=network.target
-
-[Service]
-Type=simple
-User=ubuntu
-WorkingDirectory=/home/ubuntu/pm
-EnvironmentFile=/home/ubuntu/pm/.env
-ExecStart=/usr/bin/node src/index.js
-Restart=on-failure
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-```
-
-### .env File Format
-
-Create a `.env` file (it's gitignored) for use with `dotenv-cli` or systemd `EnvironmentFile`:
-
-```bash
-PRIVATE_KEY=0xYourPrivateKeyHere
-WSS_URL=wss://polygon-mainnet.g.alchemy.com/v2/YOUR_KEY
-# RPC_URL=https://polygon-rpc.com
-# WEBHOOK_URL=https://hooks.slack.com/services/xxx
-# LIVE_MODE=1
-```
-
----
-
-## Data Files
-
-All auto-managed in the `data/` directory:
-
-| File | Purpose | Format |
-|------|---------|--------|
-| `positions.json` | Open positions with cost basis, P&L | JSON |
-| `stats.json` | Trade statistics across restarts | JSON |
-| `health.json` | Health check (updated every 60s) | JSON |
-| `trades.jsonl` | Trade journal (rotates at 10MB) | JSON Lines |
-| `whale-tracker.json` | Whale performance data | JSON |
-
-These files are gitignored and created automatically on first run.
+| Problem | Solution |
+|---------|----------|
+| `"No targets configured"` | Add whale addresses to `targets` in `src/config.js` |
+| `"privateKey required"` | Set `PRIVATE_KEY` in `.env` or env var |
+| Bot runs but no events | Verify whales are actively trading; check WSS_URL is correct |
+| All trades show `[SKIP]` | Check skip reasons in logs — filters are protecting you |
+| `"drift"` skips | Market moved since whale traded — filter working correctly |
+| `"wide_spread"` skips | Market is illiquid — filter protecting from bad fills |
+| `"price_too_high"` skips | Token above $0.92 — limited upside |
+| Orders rejected | Check USDC balance on Polygon; ensure wallet approved on Polymarket |
+| WSS disconnects | Normal on free tiers — bot auto-reconnects |
+| Balance shows $0 | Make sure USDC is on **Polygon network**, not Ethereum |
+| Docker: container exits | Run `docker compose logs` to see the error |
+| Docker: no data folder | Created automatically on first run |
 
 ---
 
 ## Security Checklist
 
-- [ ] **Never commit keys** -- use env vars or .env file
-- [ ] **Dedicated trading wallet** -- not your main wallet
-- [ ] **Start with dry-run** -- verify behavior before risking money
-- [ ] **Small copyRatio first** -- 0.02-0.05 to start
-- [ ] **Set maxDailyUsdc** -- limit daily exposure
-- [ ] **Set maxPositionUsdc** -- limit single-market exposure
-- [ ] **Monitor health.json** -- set up external uptime monitoring
-- [ ] **Review portfolio daily** -- especially in the first 2 weeks
-- [ ] **Keep your WSS endpoint private** -- it has your API key
-- [ ] **Use a VPS** -- low latency to Polygon nodes matters
+- [ ] Using a **dedicated trading wallet** (not your main wallet)
+- [ ] Private key is in `.env` file (not hardcoded in config.js)
+- [ ] `.env` is in `.gitignore` (already configured)
+- [ ] Started with **dry-run mode** first
+- [ ] Using **small copyRatio** (0.02–0.05) to start
+- [ ] Set **maxDailyUsdc** to limit daily exposure
+- [ ] WSS endpoint URL is kept private
+- [ ] VPS has firewall enabled (only SSH port open)
 
 ---
 
-## Troubleshooting
+## Quick Reference: File Structure
 
-| Problem | Solution |
-|---------|----------|
-| "No targets configured" | Add whale addresses to `config.targets` in `src/config.js` |
-| "privateKey required for live mode" | Set `PRIVATE_KEY` env var |
-| Bot connects but no events | Check whale wallets are actively trading; verify WSS URL |
-| All trades skipped | Check skip reasons in logs -- may need to adjust filters |
-| "drift" skips | Whale's old trades have stale prices; this is the filter working correctly |
-| "wide_spread" skips | Market is illiquid; this protects you from bad fills |
-| "price_too_high" skips | Token above $0.92; limited upside, filter is protecting you |
-| "low_quality" skips | Market has low volume; market quality filter is working |
-| "low_edge" skips | Trade doesn't pass edge score threshold; try lowering `minEdgeScore` |
-| Orders rejected | Check USDC balance on Polygon; ensure wallet approved Polymarket |
-| WSS disconnects | Normal on free tiers; bot auto-reconnects with backoff |
-| Balance shows $0 | Ensure USDC is on **Polygon** (not Ethereum mainnet) |
-| Simulate tests fail | Run `npm install` first; requires Node.js >= 18 |
-
----
-
-## Disclaimer
-
-This bot is a tool for copy trading on Polymarket. There is no guarantee of profits. Prediction markets carry risk, and even the best whales can lose money. Always:
-- Only trade with money you can afford to lose
-- Start with small amounts and dry-run testing
-- Monitor your positions regularly
-- Understand that past whale performance does not guarantee future results
+```
+pl1/
+├── src/
+│   ├── index.js            # Entry point
+│   ├── config.js           # All configuration (edit this!)
+│   ├── trader.js           # Order execution with smart filters
+│   ├── monitor.js          # On-chain event listener
+│   ├── api.js              # Polymarket API with caching
+│   ├── positions.js        # Position tracking & P&L
+│   ├── exit-manager.js     # Auto stop-loss / take-profit
+│   ├── stats.js            # Runtime statistics
+│   ├── logger.js           # Logging & webhooks
+│   ├── whale-tracker.js    # Whale performance tracking
+│   ├── test.js             # Connectivity tests
+│   ├── simulate.js         # Offline logic tests
+│   ├── show-positions.js   # CLI: view positions
+│   └── show-portfolio.js   # CLI: view portfolio
+├── data/                   # Auto-created, persisted state
+├── .env                    # Your secrets (git-ignored)
+├── .env.example            # Template for .env
+├── .gitignore
+├── Dockerfile
+├── docker-compose.yml
+├── package.json
+└── guide.md                # This file
+```
