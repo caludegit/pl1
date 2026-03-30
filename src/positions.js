@@ -117,9 +117,10 @@ class PositionManager {
                 }
             }
 
-            // Remove local positions not on chain — but only if the chain API
-            // returned at least some data (protects against incomplete/empty responses)
-            if (onChainTokens.size > 0 || onChain.length === 0) {
+            // Remove local positions not on chain — only when the chain API returned
+            // at least one valid position (guards against empty or malformed responses
+            // wiping the position book on a temporary API failure)
+            if (onChainTokens.size > 0) {
                 for (const tokenId of this.positions.keys()) {
                     if (!onChainTokens.has(tokenId)) {
                         log.info('POS', `Removing stale position ...${tokenId.slice(-12)} (not found on-chain)`);
@@ -128,7 +129,7 @@ class PositionManager {
                     }
                 }
             } else {
-                log.warn('POS', 'Chain API returned data but no valid positions — skipping cleanup to prevent data loss');
+                log.warn('POS', 'Chain API returned no valid positions — skipping cleanup to prevent data loss');
             }
 
             if (synced > 0) this._scheduleSave();
