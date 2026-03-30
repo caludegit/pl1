@@ -268,8 +268,8 @@ export class OnChainMonitor {
                 }
             }
 
-            // Skip malformed or dust events
-            if (tokenId === '0' || tokenAmount <= 0 || usdcAmount <= 0) return;
+            // Skip malformed or dust events (NaN comparisons return false, so check explicitly)
+            if (tokenId === '0' || !(tokenAmount > 0) || !(usdcAmount > 0)) return;
 
             const side   = isBuy ? 'BUY' : 'SELL';
             const exch   = evt.address.toLowerCase() === EXCHANGES[1].toLowerCase() ? 'NegRisk' : 'CTF';

@@ -376,8 +376,14 @@ async function _execute(target, activity) {
     ]);
 
     const { tickSize, negRisk } = extractMarketParams(market);
-    const mid = midpoint ?? price;
+    const mid = (midpoint != null && !isNaN(midpoint)) ? midpoint : price;
     const name = market.question || market.title || `...${tokenId.slice(-12)}`;
+
+    // Guard against NaN/zero mid — can't price the trade
+    if (mid == null || isNaN(mid) || mid <= 0) {
+        log.trade(TAG, { side, market: name, action: 'skip', reason: 'no_price', mid });
+        return { ok: false, reason: 'no_price' };
+    }
 
     // ── Market status check ───────────────────────────────────────────────
     if (!isMarketActive(market)) {
@@ -521,7 +527,7 @@ async function _execute(target, activity) {
                 // If we want to BUY token A, we can also SELL token B (complement)
                 // BUY A at price P is equivalent to SELL B at price (1-P)
                 const compSide = isBuy ? 'SELL' : 'BUY';
-                const compAmount = isBuy ? (amount / refPrice) : amount; // shares for complement
+                const compAmount = isBuy ? (refPrice > 0 ? amount / refPrice : 0) : amount; // shares for complement
                 const compExec = getExecutionPriceFromBook(compBook, compSide, compAmount);
                 if (compExec) {
                     // Compare: for BUY, lower is better; for SELL, higher is better
@@ -880,7 +886,15 @@ export async function dryRunCopyTrade(target, activity) {
     }
 
     let mid = price;
-    try { mid = (await getMidpoint(tokenId)) ?? price; } catch {}
+    try {
+        const fetched = await getMidpoint(tokenId);
+        if (fetched != null && !isNaN(fetched) && fetched > 0) mid = fetched;
+    } catch {}
+
+    // Guard against NaN/zero mid
+    if (mid == null || isNaN(mid) || mid <= 0) {
+        return { dryRun: true, side, amount: 0, reason: 'no_price' };
+    }
 
     // Smart filters in dry-run too
     if (isBuy && mid > config.maxBuyPrice) {

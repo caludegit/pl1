@@ -219,7 +219,8 @@ async function _exitPosition(pos, mid, reason) {
             log.warn(TAG, `Market closed/resolved for ...${tokenId.slice(-12)}, skipping auto-exit`);
             return;
         }
-        const { tickSize, negRisk } = extractMarketParams(market);
+        const { tickSize: rawTickSize, negRisk } = extractMarketParams(market);
+        const tickSize = String(rawTickSize);
         const tick = parseFloat(tickSize);
 
         // Worst price for sell: floor to tick, clamp to valid range [tick, 1-tick]
