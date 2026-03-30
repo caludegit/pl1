@@ -5,8 +5,37 @@
 //
 // Usage:
 //   PRIVATE_KEY=0x... WSS_URL=wss://... node src/index.js
-//   # or use a .env loader like dotenv-cli:
-//   dotenv -- node src/index.js
+//   # or just create a .env file (auto-loaded)
+
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
+
+// ── Minimal .env loader (no external dependency) ─────────────────────────────
+function loadEnvFile() {
+    try {
+        const envPath = resolve(process.cwd(), '.env');
+        const content = readFileSync(envPath, 'utf-8');
+        for (const line of content.split('\n')) {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith('#')) continue;
+            const eqIdx = trimmed.indexOf('=');
+            if (eqIdx < 0) continue;
+            const key = trimmed.slice(0, eqIdx).trim();
+            let val = trimmed.slice(eqIdx + 1).trim();
+            // Strip surrounding quotes
+            if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+                val = val.slice(1, -1);
+            }
+            // Only set if not already defined (real env vars take precedence)
+            if (!(key in process.env)) {
+                process.env[key] = val;
+            }
+        }
+    } catch {
+        // No .env file — that's fine, use env vars directly
+    }
+}
+loadEnvFile();
 
 const env = process.env;
 
@@ -150,13 +179,19 @@ const config = {
 
     // ── Wallets to copy ───────────────────────────────────────────────────────
     targets: [
-        // {
-        //   address:   '0xABC...',
-        //   label:     'Whale-Alpha',
-        //   copyRatio: 0.05,         // copy 5% of whale's trade size
-        //   maxUsdc:   25,           // max $25 per trade
-        //   sellMode:  'all',
-        // },
+        ...(env.TEST_ADDRESS ? [{
+            address:   env.TEST_ADDRESS,
+            label:     'Test-Whale',
+            copyRatio: 0.05,
+            maxUsdc:   25,
+            sellMode:  'all',
+        }] : [{
+            address:   '0xbd77b83d0c21a86b7a8d8ca324db089bc6e1dc7e',
+            label:     'Demo-Whale',
+            copyRatio: 0.05,
+            maxUsdc:   25,
+            sellMode:  'all',
+        }]),
     ],
 
     // ── Test address (for npm test) ───────────────────────────────────────────
