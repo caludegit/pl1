@@ -187,8 +187,17 @@ function _cleanup(tokenId) {
 }
 
 async function _exitPosition(pos, mid, reason) {
-    const { tokenId, shares, market: marketName, copiedFrom } = pos;
+    const { tokenId, market: marketName, copiedFrom } = pos;
     const TAG = 'EXIT';
+
+    // Re-fetch the position to guard against a race where the main trader already
+    // closed it (e.g. whale sold at the same moment the exit manager fired).
+    const currentPos = positions.getPosition(tokenId);
+    if (!currentPos || currentPos.shares <= 0.0001) {
+        log.debug(TAG, `Position ...${tokenId.slice(-12)} already closed, skipping ${reason}`);
+        return;
+    }
+    const shares = currentPos.shares;
 
     if (!_client) {
         log.info(TAG, `[DRY] Would sell ${shares.toFixed(4)} shares @ $${mid.toFixed(4)} (${reason})`);

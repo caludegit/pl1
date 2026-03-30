@@ -233,15 +233,16 @@ function _calcAmount(target, activity, mid) {
     }
 
     if (sellMode === 'proportional') {
-        // fraction = what % of the whale's position they sold
-        // We need whale's total position (approx: whaleSold is all we see, so sell 100% if whale exits)
-        // Best approximation: sell the same fraction of OUR position
-        const whaleSold = size;
-        // Use whale's sold amount relative to our shares as a proxy
-        // If whale sold more shares than we hold, they're exiting — we exit too
-        const fraction = Math.min(1, whaleSold / ourShares);
-        let sellShares = ourShares * fraction;
+        // Estimate what fraction of their position the whale sold.
+        // We don't have the whale's total holding, so infer it:
+        //   estimatedWhalePositionUsdc = maxUsdc / copyRatio  (reverse-scales our cap back to whale size)
+        //   whaleSoldUsdc              = usdcSize from the event (actual USDC received by whale)
+        // fraction = whaleSoldUsdc / estimatedWhalePositionUsdc → sell same % of our position
         const effectiveMid = mid > 0 ? mid : Math.max(price, 0.01);
+        const whaleSoldUsdc = usdcSize || size * effectiveMid;
+        const estimatedWhalePositionUsdc = copyRatio > 0 ? maxUsdc / copyRatio : maxUsdc;
+        const fraction = Math.min(1, whaleSoldUsdc / estimatedWhalePositionUsdc);
+        const sellShares = ourShares * fraction;
         const maxShares = maxUsdc / effectiveMid;
         return { amount: parseFloat(Math.min(sellShares, maxShares, ourShares).toFixed(4)), signalBoost: 1, whaleMultiplier: 1 };
     }
