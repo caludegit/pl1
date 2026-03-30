@@ -171,6 +171,7 @@ const config = {
     logLevel:     env.LOG_LEVEL || 'info',
     logFile:      'data/trades.jsonl',
     logMaxBytes:  10 * 1024 * 1024,
+    webhookUrl:   env.WEBHOOK_URL || '',
 
     // ── Market filters ────────────────────────────────────────────────────────
     marketBlocklist: [],
