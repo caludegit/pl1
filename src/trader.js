@@ -280,6 +280,7 @@ async function _execute(target, activity) {
     const { label, address: walletAddr } = target;
     const { conditionId, asset: tokenId, side, price, usdcSize, transactionHash, fillCount } = activity;
     const isBuy = side === 'BUY';
+    const _perfStart = config.enablePerfTiming ? performance.now() : 0;
     const TAG = label;
 
     // Fetch market + midpoint + book in parallel
@@ -563,6 +564,10 @@ async function _execute(target, activity) {
             });
         }
 
+        if (config.enablePerfTiming) {
+            const elapsed = (performance.now() - _perfStart).toFixed(0);
+            log.info(TAG, `⏱ signal-to-order: ${elapsed}ms`);
+        }
         return { ok: true, orderID: orderId, side };
 
     } catch (err) {
@@ -616,8 +621,23 @@ async function _executeGtcOrder(tokenId, side, amount, mid, tickSize, negRisk, T
     const orderId = result?.orderID;
     if (!orderId) return result;
 
-    // Wait for fill or timeout
-    await new Promise(r => setTimeout(r, config.gtcTimeoutMs));
+    // Poll for fill instead of blocking for full timeout
+    const pollInterval = 2000;
+    const maxPolls = Math.ceil(config.gtcTimeoutMs / pollInterval);
+    let filled = false;
+    for (let i = 0; i < maxPolls && !filled; i++) {
+        await new Promise(r => setTimeout(r, pollInterval));
+        try {
+            // Try to get the order — if it's filled, we're done
+            const order = await client.getOrder(orderId);
+            if (order?.status === 'MATCHED' || order?.status === 'FILLED') {
+                filled = true;
+            }
+        } catch {
+            // Ignore — will try cancel below
+        }
+    }
+    if (filled) return result;
 
     // Check if filled by trying to cancel — if cancel fails, order was filled
     try {
@@ -756,7 +776,9 @@ export async function dryRunCopyTrade(target, activity) {
     const whaleStr = whaleMultiplier !== 1.0 ? ` | WHALE x${whaleMultiplier.toFixed(1)}` : '';
 
     log.trade(TAG, { side, market: name, action: 'dry_run', amount, price, mid, role, fillCount, signalBoost, whaleMultiplier });
-    log.info(TAG, `Would ${side} ${amount} ${isBuy ? 'USDC' : 'shares'} @ $${price.toFixed(4)} mid $${mid.toFixed(4)} (${role})${holdInfo}${boostStr}${whaleStr}`);
+    const estFee = isBuy ? amount * 0.002 : amount * mid * 0.002; // ~20bps taker estimate
+    const estProfit = isBuy ? (mid < 0.5 ? (1 - mid) * (amount / mid) - amount : 0) : amount * mid - (positions.getPosition(tokenId)?.costBasis || 0);
+    log.info(TAG, `[DRY RUN] Would ${side} ${amount} ${isBuy ? 'USDC' : 'shares'} of "${name.slice(0, 50)}" at $${mid.toFixed(4)} | Est. profit: $${estProfit.toFixed(2)} | Fee: $${estFee.toFixed(4)}${holdInfo}${boostStr}${whaleStr}`);
 
     // Track positions and daily spend in dry-run
     if (isBuy && amount > 0) {
