@@ -923,6 +923,12 @@ export async function dryRunCopyTrade(target, activity) {
 
     const { amount, signalBoost, whaleMultiplier } = _calcAmount(target, activity, mid);
 
+    // Min order check (same as live mode)
+    const valueCheck = isBuy ? amount : amount * mid;
+    if (valueCheck < config.minOrderUsdc) {
+        return { dryRun: true, side, amount: 0, reason: 'too_small' };
+    }
+
     // Edge score filter (same as live mode)
     if (config.enableEdgeFilter && isBuy && market) {
         const quality = getMarketQuality(market);
@@ -983,6 +989,9 @@ export async function dryRunCopyTrade(target, activity) {
         }
     }
 
-    if (amount > 0) _recentOrders.set(dedupKey, Date.now());
+    if (amount > 0) {
+        _recentOrders.set(dedupKey, Date.now());
+        _stampCooldown(wallet, tokenId);
+    }
     return { dryRun: true, side, amount, signalBoost };
 }
