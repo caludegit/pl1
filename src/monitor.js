@@ -101,6 +101,18 @@ export class OnChainMonitor {
         try {
             if (config.wssUrl) {
                 this.provider = new ethers.providers.WebSocketProvider(config.wssUrl);
+
+                // Wait for the underlying websocket to actually open (with timeout)
+                const ws = this.provider._websocket;
+                if (ws && ws.readyState !== 1 /* OPEN */) {
+                    await Promise.race([
+                        new Promise((resolve, reject) => {
+                            ws.on('open', resolve);
+                            ws.on('error', reject);
+                        }),
+                        new Promise((_, reject) => setTimeout(() => reject(new Error('WSS open timeout (10s)')), 10_000)),
+                    ]);
+                }
             } else {
                 log.warn('MON', 'No wssUrl — falling back to HTTP polling (10-15s delay)');
                 this.provider = new ethers.providers.JsonRpcProvider(config.rpcUrl);
@@ -124,8 +136,11 @@ export class OnChainMonitor {
                 });
             }
 
-            // Confirm the connection is alive before subscribing
-            await this.provider.getNetwork();
+            // Confirm the connection is alive before subscribing (with timeout)
+            await Promise.race([
+                this.provider.getNetwork(),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Connection timeout (15s)')), 15_000)),
+            ]);
             this._reconnectDelay = 2_000; // reset backoff on success
 
             // Subscribe to OrderFilled for all targets.

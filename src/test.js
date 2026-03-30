@@ -47,12 +47,21 @@ async function test() {
     // 2. RPC
     console.log('  [RPC]');
     await check('Connect to Polygon', async () => {
-        const provider = config.wssUrl
-            ? new ethers.providers.WebSocketProvider(config.wssUrl)
-            : new ethers.providers.JsonRpcProvider(config.rpcUrl);
-        const net = await provider.getNetwork();
-        if (net.chainId !== 137) throw new Error(`Expected chainId 137, got ${net.chainId}`);
-        provider.destroy?.();
+        let provider;
+        try {
+            provider = config.wssUrl
+                ? new ethers.providers.WebSocketProvider(config.wssUrl)
+                : new ethers.providers.JsonRpcProvider(config.rpcUrl);
+            // Suppress unhandled WebSocket errors during test
+            if (provider._websocket) provider._websocket.on('error', () => {});
+            const net = await Promise.race([
+                provider.getNetwork(),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Connection timeout (10s)')), 10_000)),
+            ]);
+            if (net.chainId !== 137) throw new Error(`Expected chainId 137, got ${net.chainId}`);
+        } finally {
+            try { provider?.destroy?.(); } catch {}
+        }
     });
     console.log('');
 

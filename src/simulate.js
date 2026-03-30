@@ -106,11 +106,19 @@ console.log('  [Config Validation]');
 
 import config from './config.js';
 
-// Default config should fail (no targets)
+// Default config should pass (demo target configured)
 {
     const errors = config.validate();
-    assert(errors.length > 0, `default config fails: "${errors[0]}"`);
+    assert(errors.length === 0, `default config valid (${errors.length} errors${errors.length ? ': ' + errors[0] : ''})`);
+}
+
+// Test missing targets validation
+{
+    const origTargets = config.targets;
+    config.targets = [];
+    const errors = config.validate();
     assert(errors.some(e => e.includes('No targets')), 'catches missing targets');
+    config.targets = origTargets;
 }
 
 // Test sell mode validation
