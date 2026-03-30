@@ -113,17 +113,17 @@ const config = {
     evExitMinPrice:      0.05,   // if holding and price < 0.05, sell (likely total loss)
 
     // ── Risk controls ─────────────────────────────────────────────────────────
-    maxDailyUsdc:      100,      // daily BUY spend cap
+    maxDailyUsdc:      parseInt(env.MAX_DAILY_USDC      || '100', 10),  // daily BUY spend cap
     maxOpenPositions:  10,       // max concurrent positions
-    maxPositionUsdc:   50,       // max cost basis per position
-    minBalanceUsdc:    20,       // reserve — stop buying if USDC balance < this
-    maxTradeUsdc:      25,       // per-trade max risk (never risk more than this on a single trade)
+    maxPositionUsdc:   parseInt(env.MAX_POSITION_USDC   || '50',  10),  // max cost basis per position
+    minBalanceUsdc:    parseInt(env.MIN_BALANCE_USDC    || '20',  10),  // reserve — stop buying if USDC balance < this
+    maxTradeUsdc:      parseInt(env.MAX_TRADE_USDC      || '25',  10),  // per-trade max risk (never risk more than this on a single trade)
     maxPortfolioExposurePct: 0.80, // max 80% of bankroll in open positions
 
     // ── Daily drawdown circuit breaker ────────────────────────────────────────
     // Halts all new BUY trades for the day if realized+unrealized losses exceed threshold
     enableDrawdownBreaker: true,
-    maxDailyDrawdownUsdc:  30,   // halt buying if daily losses exceed $30
+    maxDailyDrawdownUsdc:  parseInt(env.MAX_DAILY_DRAWDOWN_USDC || '30', 10),  // halt buying if daily losses exceed this
 
     // ── Market expiry filter ─────────────────────────────────────────────────
     // Avoid markets expiring soon — not enough time for recovery
@@ -167,11 +167,10 @@ const config = {
     statsFile:           'data/stats.json',
     healthFile:          'data/health.json',
 
-    // ── Logging & notifications ───────────────────────────────────────────────
-    logLevel:     'info',
+    // ── Logging ───────────────────────────────────────────────────────────────
+    logLevel:     env.LOG_LEVEL || 'info',
     logFile:      'data/trades.jsonl',
     logMaxBytes:  10 * 1024 * 1024,
-    webhookUrl:   env.WEBHOOK_URL || '',
 
     // ── Market filters ────────────────────────────────────────────────────────
     marketBlocklist: [],
