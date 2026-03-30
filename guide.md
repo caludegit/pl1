@@ -180,7 +180,7 @@ Edit `src/config.js` to add your whale targets:
 nano src/config.js    # or use any text editor
 ```
 
-Find the `targets: []` array (around line 125) and add your whales:
+Find the `targets: []` array (around line 180) and add your whales:
 
 ```js
 targets: [
@@ -260,11 +260,22 @@ Fill in your `.env`:
 PRIVATE_KEY=0xYourPrivateKeyHere
 WSS_URL=wss://polygon-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_KEY
 
-# ── Optional ──────────────────────────────────────────────
-# RPC_URL=https://polygon-rpc.com
+# ── Mode ──────────────────────────────────────────────────
 # LIVE_MODE=1
 # DRY_RUN=true
+
+# ── Risk overrides ────────────────────────────────────────
+# MAX_DAILY_USDC=100
+# MAX_POSITION_USDC=50
+# MAX_TRADE_USDC=25
+# MIN_BALANCE_USDC=20
+# MAX_DAILY_DRAWDOWN_USDC=30
+
+# ── Optional ──────────────────────────────────────────────
+# RPC_URL=https://polygon-rpc.com
 # WEBHOOK_URL=https://hooks.slack.com/services/xxx/yyy/zzz
+# LOG_LEVEL=info
+# KILL_SWITCH=0
 # TEST_ADDRESS=0xSomeWhaleAddress
 # FUNDER_ADDRESS=0x...
 # SIGNATURE_TYPE=0
@@ -279,6 +290,13 @@ WSS_URL=wss://polygon-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_KEY
 | `RPC_URL` | No | HTTP RPC fallback (default: `https://polygon-rpc.com`) |
 | `LIVE_MODE` | No | Set to `1` for live trading. Default: dry-run |
 | `DRY_RUN` | No | Set to `true` or `1` for dry-run. Overrides `LIVE_MODE` |
+| `MAX_DAILY_USDC` | No | Daily spend cap in USD (default: `100`) |
+| `MAX_POSITION_USDC` | No | Max cost basis per position (default: `50`) |
+| `MAX_TRADE_USDC` | No | Max risk per single trade (default: `25`) |
+| `MIN_BALANCE_USDC` | No | Stop buying if balance drops below this (default: `20`) |
+| `MAX_DAILY_DRAWDOWN_USDC` | No | Halt new buys after this much daily loss (default: `30`) |
+| `LOG_LEVEL` | No | `debug`, `info` (default), `warn`, or `error` |
+| `KILL_SWITCH` | No | Set to `1` to immediately halt all new trades |
 | `WEBHOOK_URL` | No | Slack/Discord webhook for trade alerts |
 | `TEST_ADDRESS` | No | Wallet address for `npm test` checks |
 | `FUNDER_ADDRESS` | No | For proxy/smart wallets only |
@@ -324,9 +342,9 @@ npm start
 
 Starts in **dry-run mode** — detects whale trades and simulates copies **without spending real money**. Watch the logs:
 
-- `[BUY-DRY]` = would have bought
-- `[SELL-DRY]` = would have sold
-- `[SKIP]` = filtered out (with reason)
+- `[DRY:WhaleName] [DRY RUN] Would BUY 25.00 USDC of "..."` = would have bought
+- `[DRY:WhaleName] [DRY RUN] Would SELL 50.0000 shares of "..."` = would have sold
+- Set `LOG_LEVEL=debug` in `.env` to see individual skip reasons (price, spread, etc.)
 
 > **Run dry-run for at least a few hours** (ideally 1–2 days) to verify it's detecting trades and the filters make sense.
 
@@ -639,12 +657,20 @@ docker kill --signal=SIGUSR2 poly-trader   # print stats
 
 ### Risk Controls
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `maxDailyUsdc` | 100 | Daily spend cap |
-| `maxOpenPositions` | 10 | Max concurrent positions |
-| `maxPositionUsdc` | 50 | Max per position |
-| `minBalanceUsdc` | 20 | Reserve — stop buying below this |
+| Parameter | Default | Env var | Description |
+|-----------|---------|---------|-------------|
+| `maxDailyUsdc` | 100 | `MAX_DAILY_USDC` | Daily BUY spend cap |
+| `maxOpenPositions` | 10 | — | Max concurrent positions |
+| `maxPositionUsdc` | 50 | `MAX_POSITION_USDC` | Max cost basis per position |
+| `maxTradeUsdc` | 25 | `MAX_TRADE_USDC` | Max risk on a single trade |
+| `minBalanceUsdc` | 20 | `MIN_BALANCE_USDC` | Reserve — stop buying below this |
+| `maxPortfolioExposurePct` | 0.80 | — | Max 80% of bankroll in open positions |
+| `enableDrawdownBreaker` | true | — | Enable daily loss circuit breaker |
+| `maxDailyDrawdownUsdc` | 30 | `MAX_DAILY_DRAWDOWN_USDC` | Halt new buys after this daily loss |
+| `minExpiryHours` | 24 | — | Skip markets expiring in < 24 hours |
+| `enableStreakCooldown` | true | — | Pause copying a whale on losing streak |
+| `maxLosingStreak` | 3 | — | Consecutive losses before cooldown |
+| `streakCooldownMs` | 3600000 (1h) | — | How long to pause after a losing streak |
 
 ### Order Execution
 
