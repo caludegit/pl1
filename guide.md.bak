@@ -253,11 +253,8 @@ WSS_URL=wss://polygon-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_KEY
 # ── Optional ──────────────────────────────────────────────
 # RPC_URL=https://polygon-rpc.com
 # LIVE_MODE=1
-# DRY_RUN=true
 # WEBHOOK_URL=https://hooks.slack.com/services/xxx/yyy/zzz
 # TEST_ADDRESS=0xSomeWhaleAddress
-# FUNDER_ADDRESS=0x...
-# SIGNATURE_TYPE=0
 ```
 
 ### All Environment Variables
@@ -268,7 +265,6 @@ WSS_URL=wss://polygon-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_KEY
 | `WSS_URL` | Recommended | Polygon WebSocket URL (real-time detection) |
 | `RPC_URL` | No | HTTP RPC fallback (default: `https://polygon-rpc.com`) |
 | `LIVE_MODE` | No | Set to `1` for live trading. Default: dry-run |
-| `DRY_RUN` | No | Set to `true` or `1` for dry-run. Overrides `LIVE_MODE` |
 | `WEBHOOK_URL` | No | Slack/Discord webhook for trade alerts |
 | `TEST_ADDRESS` | No | Wallet address for `npm test` checks |
 | `FUNDER_ADDRESS` | No | For proxy/smart wallets only |
@@ -290,15 +286,7 @@ npm run simulate
 
 Runs 152 offline tests — position math, filters, exits, whale tracking. Everything should pass.
 
-### Step 8B: Audit Test Suite
-
-```bash
-node src/audit-test.js
-```
-
-Tests auth, market fetch, copy logic, dry-run orders, and speed benchmarks. Runs with or without API keys (API-dependent tests are skipped gracefully when keys are missing).
-
-### Step 8C: Connectivity Test
+### Step 8B: Connectivity Test
 
 ```bash
 npm test
@@ -306,7 +294,7 @@ npm test
 
 Tests RPC connection, Polymarket API access, and order book analysis. Needs `RPC_URL` or `WSS_URL`.
 
-### Step 8D: Dry-Run (Watch Mode)
+### Step 8C: Dry-Run (Watch Mode)
 
 ```bash
 npm start
@@ -330,12 +318,6 @@ Starts in **dry-run mode** — detects whale trades and simulates copies **witho
 npm start
 ```
 
-Or explicitly:
-
-```bash
-DRY_RUN=true npm start
-```
-
 ### Live Mode
 
 ```bash
@@ -347,8 +329,6 @@ Or if using `.env`, add `LIVE_MODE=1` to your `.env` file, then:
 ```bash
 npm start
 ```
-
-> **Note**: `DRY_RUN=true` or `DRY_RUN=1` in your environment forces dry-run regardless of `LIVE_MODE`.
 
 ### Keep It Running with PM2
 
@@ -585,9 +565,7 @@ docker kill --signal=SIGUSR2 poly-trader   # print stats
 | `maxPriceDrift` | 0.10 (10%) | Skip if market moved >10% since whale's fill |
 | `cooldownMs` | 30000 (30s) | Min time between copies of same token+wallet |
 | `minOrderUsdc` | 1 | Skip trades below $1 |
-| `txBatchWindowMs` | 400 | ms to wait for partial fills in same tx before firing copy |
-| `dryRun` | true | Set `LIVE_MODE=1` or `DRY_RUN=false` for live trading |
-| `enablePerfTiming` | true | Log signal-to-order latency (ms) for each trade |
+| `dryRun` | true | Set `LIVE_MODE=1` to trade for real |
 
 ### Smart Filters (Don't Disable These)
 
@@ -599,14 +577,6 @@ docker kill --signal=SIGUSR2 poly-trader   # print stats
 | `minBookDepthUsdc` | 50 | Skip if order book too thin |
 | `useSmartRouting` | true | Compare YES vs NO token for best fill |
 
-### Multi-Whale Signal Detection
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `signalWindowMs` | 300000 (5m) | Window to detect whale convergence |
-| `signalBoostRatio` | 1.5 | Multiply copyRatio per additional whale |
-| `signalMaxBoost` | 3.0 | Cap the boost multiplier |
-
 ### Auto-Exit
 
 | Parameter | Default | Description |
@@ -617,15 +587,8 @@ docker kill --signal=SIGUSR2 poly-trader   # print stats
 | `enableTrailingStop` | true | Track high, exit on pullback |
 | `trailingStopPct` | 0.12 | Exit if price drops 12% from high |
 | `enableProfitRatchet` | true | Once +15%, never go negative |
-| `ratchetThreshold` | 0.15 | Activate ratchet at +15% profit |
-| `ratchetFloor` | 0.02 | Lock in +2% minimum once ratchet activates |
 | `enableTimeExit` | true | Exit stale positions after 72h |
-| `timeExitHours` | 72 | Hours of no movement before exit |
-| `timeExitMinMovePct` | 0.05 | Price must move >5% to reset stale timer |
 | `enableEvExit` | true | Exit near-extreme prices |
-| `evExitMaxPrice` | 0.95 | Sell if price > $0.95 (tiny upside left) |
-| `evExitMinPrice` | 0.05 | Sell if price < $0.05 (likely total loss) |
-| `exitCheckIntervalMs` | 30000 | Check positions every 30s |
 
 ### Risk Controls
 
@@ -643,40 +606,6 @@ docker kill --signal=SIGUSR2 poly-trader   # print stats
 | `orderMode` | 'fak' | `'fak'` = instant fill, `'gtc'` = limit order |
 | `gtcOffsetPct` | 0.01 | 1% inside spread for GTC orders |
 | `gtcTimeoutMs` | 15000 | Cancel unfilled GTC after 15s |
-
-### Whale Performance Tracking
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `enableWhaleTracking` | true | Track whale win rates, auto-adjust sizing |
-| `enableKellySizing` | true | Use Kelly criterion for optimal position sizes |
-| `whaleTrackWindowMs` | 30 days | Rolling window for whale stats |
-| `whaleMinTrades` | 5 | Min trades before adjusting copy ratio |
-| `whaleMinMultiplier` | 0.1 | Floor: never completely stop copying a whale |
-| `whaleMaxMultiplier` | 3.0 | Ceiling: never go above 3x base ratio |
-
-### Edge & Quality Filters
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `enableEdgeFilter` | true | Only copy trades with positive expected edge |
-| `minEdgeScore` | 0.3 | 0–1 scale composite score threshold |
-| `enableMarketQuality` | true | Skip low-quality markets |
-| `minMarketVolume` | 5000 | Skip markets with < $5000 total volume |
-
-### Anti-Front-Running
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `enableAntiSnipe` | true | Add random delay to prevent being front-run |
-| `antiSnipeMaxMs` | 1500 | Max random delay before placing order (0–1500ms) |
-
-### Watchdog & Stability
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `watchdogIntervalMs` | 60000 | How often to check for silence |
-| `watchdogMaxSilenceMs` | 300000 | Warn if no events for 5 minutes |
 
 ### Sell Configuration
 
@@ -787,8 +716,7 @@ pl1/
 │   ├── logger.js           # Logging & webhooks
 │   ├── whale-tracker.js    # Whale performance tracking
 │   ├── test.js             # Connectivity tests
-│   ├── simulate.js         # Offline logic tests (152 tests)
-│   ├── audit-test.js       # Comprehensive audit test suite
+│   ├── simulate.js         # Offline logic tests
 │   ├── show-positions.js   # CLI: view positions
 │   └── show-portfolio.js   # CLI: view portfolio
 ├── data/                   # Auto-created, persisted state
