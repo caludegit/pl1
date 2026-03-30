@@ -37,6 +37,16 @@ When a tracked whale buys or sells on Polymarket, the bot:
 
 **You make money when the whales you copy make money.**
 
+### Under the Hood
+
+- **API rate limiter**: max 8 requests/sec to Polymarket REST API to avoid bans
+- **Order retry logic**: transient errors (timeouts, 502/503) are retried up to 2 times with backoff
+- **TTL cache**: market data cached for 5 minutes with automatic cleanup every 10 minutes
+- **Request deduplication**: concurrent identical API calls are coalesced into one
+- **GTC fallback**: GTC limit orders poll for fill status, then fall back to FAK if unfilled after timeout
+- **In-flight balance tracking**: prevents double-spending during concurrent order execution
+- **Partial fill batching**: multiple fills in the same transaction are batched before firing the copy trade
+
 ---
 
 ## 2. Prerequisites
@@ -288,7 +298,7 @@ Run these in order before going live:
 npm run simulate
 ```
 
-Runs 152 offline tests — position math, filters, exits, whale tracking. Everything should pass.
+Runs 149 offline tests — position math, filters, exits, whale tracking. Everything should pass.
 
 ### Step 8B: Audit Test Suite
 
@@ -686,6 +696,42 @@ docker kill --signal=SIGUSR2 poly-trader   # print stats
 | `sellMode` | 'all' | `'all'`, `'ratio'`, or `'proportional'` |
 | `sellOnlyIfHeld` | true | Skip sell if we don't hold the token |
 
+### Logging & Notifications
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `logLevel` | 'info' | Log verbosity: `'debug'`, `'info'`, `'warn'`, `'error'` |
+| `logFile` | 'data/trades.jsonl' | Trade journal file (JSON Lines format) |
+| `logMaxBytes` | 10485760 (10 MB) | Rotate trade journal when it exceeds this size |
+| `webhookUrl` | '' (env: `WEBHOOK_URL`) | Slack/Discord webhook URL for trade alerts |
+
+### Market Filters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `marketBlocklist` | [] | Array of keywords — skip markets matching any keyword |
+| `marketAllowlist` | [] | Array of keywords — only trade markets matching a keyword (empty = allow all) |
+
+### Data & Persistence
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `syncPositionsOnStart` | true | Sync positions from on-chain data at startup |
+| `positionFile` | 'data/positions.json' | File path for position state |
+| `statsFile` | 'data/stats.json' | File path for runtime statistics |
+| `healthFile` | 'data/health.json' | File path for health check output |
+| `whaleTrackFile` | 'data/whale-tracker.json' | File path for whale performance data |
+
+### API Endpoints (Do Not Change)
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `clobHost` | 'https://clob.polymarket.com' | Polymarket CLOB REST API |
+| `clobWss` | 'wss://ws-subscriptions-clob.polymarket.com/ws/market' | Polymarket CLOB WebSocket |
+| `gammaHost` | 'https://gamma-api.polymarket.com' | Gamma market metadata API |
+| `dataApiHost` | 'https://data-api.polymarket.com' | Polymarket data API (positions, activity, balance) |
+| `chainId` | 137 | Polygon chain ID |
+
 ---
 
 ## 14. Strategy Guide
@@ -787,7 +833,7 @@ pl1/
 │   ├── logger.js           # Logging & webhooks
 │   ├── whale-tracker.js    # Whale performance tracking
 │   ├── test.js             # Connectivity tests
-│   ├── simulate.js         # Offline logic tests (152 tests)
+│   ├── simulate.js         # Offline logic tests (149 tests)
 │   ├── audit-test.js       # Comprehensive audit test suite
 │   ├── show-positions.js   # CLI: view positions
 │   └── show-portfolio.js   # CLI: view portfolio
