@@ -62,6 +62,9 @@ async function main() {
     console.log('  ║  Whale Tracking | Kelly Sizing | Advanced Exits       ║');
     console.log('  ╚════════════════════════════════════════════════════════╝');
     console.log('');
+    if (config.killSwitch) {
+        console.log('  ⚠  KILL SWITCH IS ON — no new trades will be placed');
+    }
     console.log(`  Mode:          ${config.dryRun ? 'DRY-RUN (no real orders)' : 'LIVE'}`);
     console.log(`  Order mode:    ${config.orderMode.toUpperCase()}${config.orderMode === 'gtc' ? ` (${config.gtcOffsetPct * 100}% offset, ${config.gtcTimeoutMs / 1000}s timeout)` : ''}`);
     console.log(`  Slippage:      ${(config.slippage * 100).toFixed(1)}%`);
@@ -80,7 +83,12 @@ async function main() {
     console.log(`    Daily cap:      ${config.maxDailyUsdc > 0 ? '$' + config.maxDailyUsdc : 'unlimited'}`);
     console.log(`    Max positions:  ${config.maxOpenPositions > 0 ? config.maxOpenPositions : 'unlimited'}`);
     console.log(`    Max per pos:    ${config.maxPositionUsdc > 0 ? '$' + config.maxPositionUsdc : 'unlimited'}`);
+    console.log(`    Max per trade:  ${config.maxTradeUsdc > 0 ? '$' + config.maxTradeUsdc : 'unlimited'}`);
+    console.log(`    Portfolio cap:  ${(config.maxPortfolioExposurePct * 100).toFixed(0)}% of bankroll`);
     console.log(`    Min balance:    $${config.minBalanceUsdc}`);
+    console.log(`    Drawdown halt:  ${config.enableDrawdownBreaker ? '$' + config.maxDailyDrawdownUsdc + ' daily loss limit' : 'OFF'}`);
+    console.log(`    Expiry filter:  ${config.minExpiryHours > 0 ? config.minExpiryHours + 'h minimum' : 'OFF'}`);
+    console.log(`    Streak pause:   ${config.enableStreakCooldown ? config.maxLosingStreak + ' losses → ' + (config.streakCooldownMs / 60_000) + 'min cooldown' : 'OFF'}`);
     console.log('');
     console.log('  Auto-Exit:');
     console.log(`    Enabled:        ${config.enableAutoExit ? 'YES' : 'NO'}`);
@@ -174,9 +182,7 @@ async function main() {
     const healthTimer = setInterval(writeHealth, 60_000);
     // ── Watchdog: warn if main loop goes silent ──────────────────────────
     let _lastEventTime = Date.now();
-    const origCallback = wrappedCallback;
-    // Reassignment not needed — wrappedCallback is already a const used by monitor
-    // Instead, patch the stats.recordEvent to track last activity
+    // Patch stats.recordEvent to track last activity for watchdog
     const origRecordEvent = stats.recordEvent.bind(stats);
     stats.recordEvent = function(...args) {
         _lastEventTime = Date.now();

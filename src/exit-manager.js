@@ -12,6 +12,7 @@ import { Side, OrderType } from '@polymarket/clob-client';
 import config from './config.js';
 import { positions } from './positions.js';
 import { whaleTracker } from './whale-tracker.js';
+import { recordExitPnl } from './trader.js';
 import * as log from './logger.js';
 import { getMidpoint, getOrderBook, getExecutionPriceFromBook, extractMarketParams, getMarketByToken, isMarketActive } from './api.js';
 
@@ -51,6 +52,7 @@ async function _checkPositions() {
     _running = true;
 
     try {
+        // Kill switch only halts new trades, exit manager should still protect capital
         const allPositions = positions.getAll();
         if (allPositions.length === 0) return;
 
@@ -193,6 +195,7 @@ async function _exitPosition(pos, mid, reason) {
         // Still record in dry-run
         const estUsdc = shares * mid;
         const pnl = positions.recordSell(tokenId, shares, estUsdc);
+        recordExitPnl(pnl);
         log.info(TAG, `[DRY] Realized P&L: $${pnl.toFixed(2)}`);
 
         // Record for whale tracking
@@ -238,6 +241,7 @@ async function _exitPosition(pos, mid, reason) {
 
         const estUsdc = shares * mid;
         const pnl = positions.recordSell(tokenId, shares, estUsdc);
+        recordExitPnl(pnl);
         const orderId = result?.orderID ?? result?.orderHash ?? 'unknown';
 
         log.info(TAG, `${reason.toUpperCase()} FILLED ${orderId} — P&L: $${pnl.toFixed(2)}`);
