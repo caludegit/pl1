@@ -96,8 +96,14 @@ export async function flushJournal() {
 const _webhookQueue = [];
 let _webhookSending = false;
 
+const MAX_WEBHOOK_QUEUE = 100;
+
 export function notify(event, data = {}) {
     if (!config.webhookUrl) return;
+    // Prevent unbounded queue growth if webhook endpoint is down
+    if (_webhookQueue.length >= MAX_WEBHOOK_QUEUE) {
+        _webhookQueue.splice(0, _webhookQueue.length - MAX_WEBHOOK_QUEUE + 1);
+    }
     _webhookQueue.push({ event, ...data, ts: new Date().toISOString() });
     _drainWebhook();
 }

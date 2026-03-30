@@ -12,6 +12,9 @@ const env = process.env;
 
 const config = {
 
+    // ── Kill switch — set KILL_SWITCH=1 to immediately halt all new trades ───
+    killSwitch:    env.KILL_SWITCH === '1' || env.KILL_SWITCH === 'true',
+
     // ── Wallet (secrets — use env vars!) ──────────────────────────────────────
     privateKey:    env.PRIVATE_KEY    || '',
     funderAddress: env.FUNDER_ADDRESS || '',
@@ -81,6 +84,23 @@ const config = {
     maxOpenPositions:  10,       // max concurrent positions
     maxPositionUsdc:   50,       // max cost basis per position
     minBalanceUsdc:    20,       // reserve — stop buying if USDC balance < this
+    maxTradeUsdc:      25,       // per-trade max risk (never risk more than this on a single trade)
+    maxPortfolioExposurePct: 0.80, // max 80% of bankroll in open positions
+
+    // ── Daily drawdown circuit breaker ────────────────────────────────────────
+    // Halts all new BUY trades for the day if realized+unrealized losses exceed threshold
+    enableDrawdownBreaker: true,
+    maxDailyDrawdownUsdc:  30,   // halt buying if daily losses exceed $30
+
+    // ── Market expiry filter ─────────────────────────────────────────────────
+    // Avoid markets expiring soon — not enough time for recovery
+    minExpiryHours:    24,       // skip markets expiring in <24 hours
+
+    // ── Losing streak cooldown (per whale) ───────────────────────────────────
+    // Pause copying a whale after consecutive losses
+    enableStreakCooldown: true,
+    maxLosingStreak:     3,      // pause after 3 consecutive losses
+    streakCooldownMs:    3_600_000, // 1 hour cooldown after losing streak
 
     // ── Sell configuration ────────────────────────────────────────────────────
     copySells:      true,        // copy target sells
@@ -184,6 +204,18 @@ config.validate = function () {
     if (!['fak', 'gtc'].includes(this.orderMode)) errors.push("orderMode must be 'fak' or 'gtc'");
     if (this.maxPositionUsdc > 0 && this.maxDailyUsdc > 0 && this.maxPositionUsdc > this.maxDailyUsdc) {
         errors.push(`maxPositionUsdc ($${this.maxPositionUsdc}) should not exceed maxDailyUsdc ($${this.maxDailyUsdc})`);
+    }
+    if (this.maxTradeUsdc > 0 && this.maxDailyUsdc > 0 && this.maxTradeUsdc > this.maxDailyUsdc) {
+        errors.push(`maxTradeUsdc ($${this.maxTradeUsdc}) should not exceed maxDailyUsdc ($${this.maxDailyUsdc})`);
+    }
+    if (this.maxPortfolioExposurePct <= 0 || this.maxPortfolioExposurePct > 1) {
+        errors.push('maxPortfolioExposurePct must be 0–1');
+    }
+    if (this.enableDrawdownBreaker && this.maxDailyDrawdownUsdc <= 0) {
+        errors.push('maxDailyDrawdownUsdc must be > 0 when drawdown breaker is enabled');
+    }
+    if (this.privateKey && !/^0x[0-9a-fA-F]{64}$/.test(this.privateKey)) {
+        errors.push('privateKey must be a 0x-prefixed 64-character hex string');
     }
     if (this.maxBuyPrice <= this.minSellPrice) {
         errors.push(`maxBuyPrice ($${this.maxBuyPrice}) must be > minSellPrice ($${this.minSellPrice})`);

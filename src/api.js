@@ -269,6 +269,21 @@ export function extractMarketParams(market) {
     return { tickSize, negRisk };
 }
 
+// ── Market expiry check ──────────────────────────────────────────────────────
+// Returns hours until market expires, or Infinity if no end date
+export function getHoursUntilExpiry(market) {
+    if (!market) return Infinity;
+    const endDate = market.end_date_iso || market.end_date || market.endDate;
+    if (!endDate) return Infinity;
+    try {
+        const expiryMs = new Date(endDate).getTime();
+        if (isNaN(expiryMs)) return Infinity;
+        return Math.max(0, (expiryMs - Date.now()) / (60 * 60_000));
+    } catch {
+        return Infinity;
+    }
+}
+
 // ── Market quality scoring (0-1) ─────────────────────────────────────────────
 // Higher = better quality market for copy trading
 export function getMarketQuality(market) {
