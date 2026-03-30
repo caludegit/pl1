@@ -13,7 +13,7 @@ import config from './config.js';
 import { positions } from './positions.js';
 import { whaleTracker } from './whale-tracker.js';
 import * as log from './logger.js';
-import { getMidpoint, getOrderBook, getExecutionPriceFromBook, extractMarketParams, getMarketByToken } from './api.js';
+import { getMidpoint, getOrderBook, getExecutionPriceFromBook, extractMarketParams, getMarketByToken, isMarketActive } from './api.js';
 
 let _timer = null;
 let _running = false;
@@ -212,6 +212,10 @@ async function _exitPosition(pos, mid, reason) {
     try {
         // Get market params for order
         const market = await getMarketByToken(tokenId);
+        if (!isMarketActive(market)) {
+            log.warn(TAG, `Market closed/resolved for ...${tokenId.slice(-12)}, skipping auto-exit`);
+            return;
+        }
         const { tickSize, negRisk } = extractMarketParams(market);
         const tick = parseFloat(tickSize);
 

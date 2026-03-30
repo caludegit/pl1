@@ -32,6 +32,7 @@ async function _rateLimit() {
 }
 
 // ── Fetch with timeout ────────────────────────────────────────────────────────
+// Node.js 18+ native fetch uses HTTP/1.1 keep-alive by default
 async function fetchT(url, opts = {}) {
     await _rateLimit();
     const ctrl = new AbortController();

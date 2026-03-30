@@ -172,6 +172,23 @@ async function main() {
     // ── Periodic tasks ────────────────────────────────────────────────────
     stats.startReporting(300_000);
     const healthTimer = setInterval(writeHealth, 60_000);
+    // ── Watchdog: warn if main loop goes silent ──────────────────────────
+    let _lastEventTime = Date.now();
+    const origCallback = wrappedCallback;
+    // Reassignment not needed — wrappedCallback is already a const used by monitor
+    // Instead, patch the stats.recordEvent to track last activity
+    const origRecordEvent = stats.recordEvent.bind(stats);
+    stats.recordEvent = function(...args) {
+        _lastEventTime = Date.now();
+        return origRecordEvent(...args);
+    };
+    const watchdogTimer = setInterval(() => {
+        const silenceMs = Date.now() - _lastEventTime;
+        if (silenceMs > config.watchdogMaxSilenceMs) {
+            log.warn('WATCHDOG', `No events for ${(silenceMs / 1000).toFixed(0)}s — check WSS connection`);
+        }
+    }, config.watchdogIntervalMs);
+    watchdogTimer.unref();
     writeHealth();
 
     // ── Graceful shutdown ─────────────────────────────────────────────────
@@ -181,6 +198,7 @@ async function main() {
         shuttingDown = true;
         log.info('SHUTDOWN', signal);
         clearInterval(healthTimer);
+        clearInterval(watchdogTimer);
         monitor.stop();
         stopExitManager();
         stats.stop();

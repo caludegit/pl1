@@ -25,7 +25,10 @@ const config = {
     cooldownMs:      30_000,     // 30s  between copies of same token+wallet
     minOrderUsdc:    1,          // skip trades below $1
     txBatchWindowMs: 400,        // ms to wait for partial fills in same tx
-    dryRun:          env.LIVE_MODE === '1' ? false : true,
+    watchdogIntervalMs: 60_000,
+    watchdogMaxSilenceMs: 300_000,
+    dryRun:          env.DRY_RUN === 'true' || env.DRY_RUN === '1' || (env.LIVE_MODE === '1' ? false : true),
+    enablePerfTiming: true,
 
     // ── Smart entry filters (THE KEY TO MAKING MONEY) ─────────────────────────
     // Don't buy near the top — limited upside, high risk of loss
