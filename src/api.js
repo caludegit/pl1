@@ -154,7 +154,9 @@ export async function getMidpoint(tokenId) {
     const res = await fetchT(`${config.clobHost}/midpoint?token_id=${tokenId}`);
     if (!res.ok) throw httpError(res.status, `CLOB midpoint ${res.status}`);
     const data = await res.json();
-    return parseFloat(data.mid);
+    const mid = parseFloat(data.mid);
+    if (isNaN(mid)) throw new Error(`Invalid midpoint for token ${tokenId}: ${data.mid}`);
+    return mid;
 }
 
 // ── CLOB: order book ─────────────────────────────────────────────────────────
@@ -264,7 +266,7 @@ export async function fetchBalance(address) {
 
 // ── Market tick & negRisk extraction ──────────────────────────────────────────
 export function extractMarketParams(market) {
-    const tickSize = market.minimum_tick_size || market.tick_size || '0.01';
+    const tickSize = String(market.minimum_tick_size || market.tick_size || '0.01');
     const negRisk  = market.neg_risk === true || market.neg_risk === 'true';
     return { tickSize, negRisk };
 }

@@ -30,7 +30,11 @@ const config = {
     txBatchWindowMs: 400,        // ms to wait for partial fills in same tx
     watchdogIntervalMs: 60_000,
     watchdogMaxSilenceMs: 300_000,
-    dryRun:          env.DRY_RUN === 'true' || env.DRY_RUN === '1' || (env.LIVE_MODE === '1' ? false : true),
+    dryRun:          (env.DRY_RUN === 'false' || env.DRY_RUN === '0')
+                         ? false
+                         : (env.DRY_RUN === 'true' || env.DRY_RUN === '1')
+                             ? true
+                             : env.LIVE_MODE !== '1',
     enablePerfTiming: true,
 
     // ── Smart entry filters (THE KEY TO MAKING MONEY) ─────────────────────────
