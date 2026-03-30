@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node src/index.js",
     "test": "node src/test.js",
+    "test:unit": "node src/unit-test.js",
     "simulate": "node src/simulate.js",
     "positions": "node src/show-positions.js",
     "portfolio": "node src/show-portfolio.js"
