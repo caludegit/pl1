@@ -282,7 +282,7 @@ export function recordExitPnl(pnl) { _recordDailyPnl(pnl); }
 // Returns null if all checks pass, or a reason string if the trade should be skipped.
 function _preflight(target, activity, TAG) {
     const { address: wallet, label } = target;
-    const { asset: tokenId, side, transactionHash } = activity;
+    const { asset: tokenId, side, transactionHash, isBatchedTx } = activity;
     const isBuy = side === 'BUY';
 
     if (config.killSwitch) return 'kill_switch';
@@ -312,7 +312,10 @@ function _preflight(target, activity, TAG) {
         }
     }
 
-    if (_onCooldown(wallet, tokenId)) return 'cooldown';
+    // Skip cooldown for batched-tx fills — multiple fills in one whale tx are a
+    // single atomic strategy. The first fill stamps the cooldown, which would
+    // block subsequent fills from the same tx.
+    if (!isBatchedTx && _onCooldown(wallet, tokenId)) return 'cooldown';
 
     return null;
 }
@@ -322,7 +325,7 @@ export async function placeCopyTrade(target, activity) {
     if (!client) throw new Error('Call initTrader() first');
 
     const { address: wallet, label } = target;
-    const { asset: tokenId, side, transactionHash } = activity;
+    const { asset: tokenId, side, transactionHash, isBatchedTx } = activity;
     const TAG = label;
     const isBuy = side === 'BUY';
 
@@ -332,7 +335,9 @@ export async function placeCopyTrade(target, activity) {
         return { ok: false, reason: skipReason };
     }
 
-    if (!_tryLock(wallet, tokenId)) {
+    // Skip lock for batched-tx fills — they're already serialized by _flushTxGroup,
+    // and the lock from fill #1 would block fill #2 for the same token (BUY+SELL).
+    if (!isBatchedTx && !_tryLock(wallet, tokenId)) {
         log.trade(TAG, { side, tokenId, action: 'skip', reason: 'locked' });
         return { ok: false, reason: 'locked' };
     }
@@ -344,7 +349,7 @@ export async function placeCopyTrade(target, activity) {
         if (result.ok) _recentOrders.set(dedupKey, Date.now());
         return result;
     } finally {
-        _unlock(wallet, tokenId);
+        if (!isBatchedTx) _unlock(wallet, tokenId);
     }
 }
 
@@ -775,7 +780,7 @@ async function _executeGtcOrder(tokenId, side, amount, mid, tickSize, negRisk, T
 // ── Dry-run ───────────────────────────────────────────────────────────────────
 export async function dryRunCopyTrade(target, activity) {
     const { label, address: wallet } = target;
-    const { side, price, asset: tokenId, role, fillCount, transactionHash } = activity;
+    const { side, price, asset: tokenId, role, fillCount, transactionHash, isBatchedTx } = activity;
     const isBuy = side === 'BUY';
     const TAG = `DRY:${label}`;
 
