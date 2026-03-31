@@ -147,17 +147,23 @@ export class OnChainMonitor {
             // Sub 1: target is the maker (topic index 2)
             // Sub 2: target is the taker (topic index 3)
             // ethers v5 treats an array in a topic position as OR logic.
+            // NOTE: ethers v5 does NOT support array in the address field of
+            // provider.on() filters — it passes the array to resolveName() which
+            // fails and falls through to ENS resolution (unsupported on Polygon).
+            // Fix: create individual subscriptions per exchange address.
             const paddedAddrs = [...this.targetMap.keys()]
                 .map(a => ethers.utils.hexZeroPad(a, 32));
 
-            this.provider.on(
-                { address: EXCHANGES, topics: [ORDER_FILLED_TOPIC, null, paddedAddrs, null] },
-                (evt) => this._onLog(evt)
-            );
-            this.provider.on(
-                { address: EXCHANGES, topics: [ORDER_FILLED_TOPIC, null, null, paddedAddrs] },
-                (evt) => this._onLog(evt)
-            );
+            for (const exchangeAddr of EXCHANGES) {
+                this.provider.on(
+                    { address: exchangeAddr, topics: [ORDER_FILLED_TOPIC, null, paddedAddrs, null] },
+                    (evt) => this._onLog(evt)
+                );
+                this.provider.on(
+                    { address: exchangeAddr, topics: [ORDER_FILLED_TOPIC, null, null, paddedAddrs] },
+                    (evt) => this._onLog(evt)
+                );
+            }
 
             // Keepalive ping — some providers silently drop idle WSS without closing.
             // getBlockNumber() is a cheap call that confirms the socket is still alive.
