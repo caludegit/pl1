@@ -80,10 +80,10 @@ export class OnChainMonitor {
         clearInterval(this._cleanSeenTimer);
         this._destroyProvider();
 
-        // Flush any batches that were mid-window when stop() was called
-        for (const [key, batch] of this._pending) {
-            clearTimeout(batch.timer);
-            this._flushBatch(key, batch);
+        // Flush any tx groups that were mid-window when stop() was called
+        for (const [key, txGroup] of this._pending) {
+            clearTimeout(txGroup.timer);
+            this._flushTxGroup(txGroup);
         }
         this._pending.clear();
         log.info('MON', 'Stopped');
@@ -299,37 +299,70 @@ export class OnChainMonitor {
             const exch   = evt.address.toLowerCase() === EXCHANGES[1].toLowerCase() ? 'NegRisk' : 'CTF';
             const target = this.targetMap.get(targetAddr);
 
-            // ── Batch partial fills ───────────────────────────────────────────────
-            // One tx can emit multiple OrderFilled for the same token (partial fills).
-            // Wait txBatchWindowMs then flush — copy trade sees correct total size.
+            // ── Batch partial fills per tx ───────────────────────────────────────
+            // One tx can emit multiple OrderFilled events:
+            //   - Partial fills: same token filled across multiple counterparties
+            //   - Multi-token: whale trades different tokens in one tx (batch/multicall)
+            //
+            // Strategy: group fills by (txHash, target, tokenId, side), but use a
+            // single flush timer per (txHash, target). When the timer fires, ALL
+            // token batches from that tx are flushed sequentially so balance tracking,
+            // daily caps, and inflight accounting stay accurate.
 
-            const batchKey = `${evt.transactionHash}:${targetAddr}:${tokenId}:${side}`;
+            const fillKey = `${evt.transactionHash}:${targetAddr}:${tokenId}:${side}`;
+            const txKey   = `${evt.transactionHash}:${targetAddr}`;
 
-            if (!this._pending.has(batchKey)) {
+            // Ensure tx-level group exists
+            if (!this._pending.has(txKey)) {
                 const windowMs = Math.max(config.txBatchWindowMs ?? 400, 0);
-                const batch = {
+                const txGroup = {
+                    batches: new Map(),  // fillKey → batch
+                    timer:   null,
+                };
+                txGroup.timer = setTimeout(() => {
+                    this._pending.delete(txKey);
+                    this._flushTxGroup(txGroup);
+                }, windowMs);
+                this._pending.set(txKey, txGroup);
+            }
+
+            const txGroup = this._pending.get(txKey);
+
+            // Ensure per-token batch within the tx group
+            if (!txGroup.batches.has(fillKey)) {
+                txGroup.batches.set(fillKey, {
                     target, tokenId, side, exchange: exch, role,
                     fills:  [],
                     txHash: evt.transactionHash,
-                    timer:  null,
-                };
-                batch.timer = setTimeout(() => {
-                    this._pending.delete(batchKey);
-                    this._flushBatch(batchKey, batch);
-                }, windowMs);
-                this._pending.set(batchKey, batch);
+                });
             }
 
-            this._pending.get(batchKey).fills.push({ usdcAmount, tokenAmount });
+            txGroup.batches.get(fillKey).fills.push({ usdcAmount, tokenAmount });
 
         } catch (err) {
             log.error('MON', 'Log decode error:', err.message);
         }
     }
 
-    // ── Flush batch → trade callback ───────────────────────────────────────────
+    // ── Flush all batches from one tx sequentially ─────────────────────────────
+    // Sequential execution ensures balance checks, daily caps, and inflight
+    // accounting are accurate when a whale trades multiple tokens in one tx.
 
-    _flushBatch(key, batch) {
+    async _flushTxGroup(txGroup) {
+        const batches = [...txGroup.batches.values()];
+
+        if (batches.length > 1) {
+            const label = batches[0].target.label;
+            const sides = batches.map(b => `${b.side} ...${b.tokenId.slice(-8)}`).join(', ');
+            log.info(label, `Multi-token tx: ${batches.length} trades in 1 tx (${sides})`);
+        }
+
+        for (const batch of batches) {
+            await this._flushBatch(batch);
+        }
+    }
+
+    async _flushBatch(batch) {
         const { target, tokenId, side, exchange, role, fills, txHash } = batch;
 
         const totalUsdc   = fills.reduce((s, f) => s + f.usdcAmount,   0);
@@ -339,18 +372,22 @@ export class OnChainMonitor {
         log.info(target.label, `${side} as ${role.toUpperCase()} on ${exchange} (${fills.length} fill${fills.length > 1 ? 's' : ''})`);
         log.info(target.label, `  ...${tokenId.slice(-20)} | $${totalUsdc.toFixed(2)} USDC | ${totalTokens.toFixed(4)} shares @ avg $${avgPrice.toFixed(4)}`);
 
-        this.onTrade(target, {
-            conditionId:     null,
-            asset:           tokenId,
-            side,
-            size:            totalTokens,
-            price:           avgPrice,
-            usdcSize:        totalUsdc,
-            transactionHash: txHash,
-            exchange,
-            role,
-            fillCount:       fills.length,
-        }).catch(e => log.error(target.label, `Callback error: ${e.message}`));
+        try {
+            await this.onTrade(target, {
+                conditionId:     null,
+                asset:           tokenId,
+                side,
+                size:            totalTokens,
+                price:           avgPrice,
+                usdcSize:        totalUsdc,
+                transactionHash: txHash,
+                exchange,
+                role,
+                fillCount:       fills.length,
+            });
+        } catch (e) {
+            log.error(target.label, `Callback error: ${e.message}`);
+        }
     }
 
     // ── Housekeeping ───────────────────────────────────────────────────────────
