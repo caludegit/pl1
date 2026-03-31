@@ -338,8 +338,12 @@ export class OnChainMonitor {
                 });
             }
 
-            const feeUsdc = fmt(fee);
-            txGroup.batches.get(fillKey).fills.push({ usdcAmount, tokenAmount, feeUsdc });
+            // Fee denomination depends on the taker's input asset:
+            //   makerIsBuying (makerAssetId=0) → taker sends tokens → fee in TOKEN units
+            //   !makerIsBuying                  → taker sends USDC   → fee in USDC units
+            const feeRaw    = fmt(fee);
+            const feeIsToken = makerIsBuying;
+            txGroup.batches.get(fillKey).fills.push({ usdcAmount, tokenAmount, feeRaw, feeIsToken });
 
         } catch (err) {
             log.error('MON', 'Log decode error:', err.message);
@@ -378,8 +382,12 @@ export class OnChainMonitor {
 
         const totalUsdc   = fills.reduce((s, f) => s + f.usdcAmount,   0);
         const totalTokens = fills.reduce((s, f) => s + f.tokenAmount, 0);
-        const totalFees   = fills.reduce((s, f) => s + f.feeUsdc,     0);
         const avgPrice    = totalTokens > 0 ? totalUsdc / totalTokens : 0;
+
+        // Convert fees to USDC — token-denominated fees use the batch avgPrice
+        const totalFees = fills.reduce((s, f) => {
+            return s + (f.feeIsToken ? f.feeRaw * avgPrice : f.feeRaw);
+        }, 0);
 
         log.info(target.label, `${side} as ${role.toUpperCase()} on ${exchange} (${fills.length} fill${fills.length > 1 ? 's' : ''})`);
         log.info(target.label, `  ...${tokenId.slice(-20)} | $${totalUsdc.toFixed(2)} USDC | ${totalTokens.toFixed(4)} shares @ avg $${avgPrice.toFixed(4)} | fee $${totalFees.toFixed(2)}`);
