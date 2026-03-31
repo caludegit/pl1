@@ -13,8 +13,8 @@ import * as log from './logger.js';
 
 // ── Polymarket exchange contracts on Polygon ──────────────────────────────────
 const EXCHANGES = [
-    '0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E',  // CTF Exchange
-    '0xC5d563A36AE78145C45a50134d48A1215220f80a',  // NegRisk CTF Exchange
+    ethers.utils.getAddress('0x4bfb41d5b3570defd03c39a9a4d8de6bd8b8982e'),  // CTF Exchange
+    ethers.utils.getAddress('0xc5d563a36ae78145c45a50134d48a1215220f80a'),  // NegRisk CTF Exchange
 ];
 const EXCHANGE_SET = new Set(EXCHANGES.map(a => a.toLowerCase()));
 
