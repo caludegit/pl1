@@ -178,7 +178,7 @@ async function _getBalance() {
 // ── Order size calculation (with signal boost + whale tracking + Kelly) ────────
 function _calcAmount(target, activity, mid) {
     const { copyRatio, maxUsdc, address: walletAddr } = target;
-    const { side, size, price, usdcSize, asset: tokenId } = activity;
+    const { side, size, price, usdcSize, netUsdcSize, asset: tokenId } = activity;
     const sellMode = config.getSellMode(target);
 
     // Multi-whale signal boost for buys
@@ -190,7 +190,8 @@ function _calcAmount(target, activity, mid) {
         : 1.0;
 
     if (side === 'BUY') {
-        const whaleUsdc = usdcSize || size * price;
+        // Use netUsdcSize (includes fees) for accurate whale spend when available
+        const whaleUsdc = netUsdcSize || usdcSize || size * price;
         let baseCopyRatio = copyRatio;
 
         // Kelly criterion sizing: adjust copyRatio based on whale's proven edge
@@ -336,6 +337,7 @@ export async function placeCopyTrade(target, activity) {
         return { ok: false, reason: 'locked' };
     }
 
+    const dedupKey = `${transactionHash || 'no-tx'}:${tokenId}:${side}`;
     try {
         const result = await _execute(target, activity);
         // Mark as seen only on successful execution attempt (not skips from _execute)
@@ -354,11 +356,13 @@ async function _execute(target, activity) {
     const _perfStart = config.enablePerfTiming ? performance.now() : 0;
     const TAG = label;
 
-    // Fetch market + midpoint + book in parallel
-    const [market, midpoint, book] = await Promise.all([
+    // Fetch market + midpoint + book + balance in parallel (minimize latency)
+    const balancePromise = isBuy ? _getBalance() : Promise.resolve(null);
+    const [market, midpoint, book, prefetchedBalance] = await Promise.all([
         conditionId ? getMarketByCondition(conditionId) : getMarketByToken(tokenId),
         getMidpoint(tokenId).catch(() => null),
         getOrderBook(tokenId).catch(() => null),
+        balancePromise.catch(() => null),
     ]);
 
     const { tickSize, negRisk } = extractMarketParams(market);
@@ -404,7 +408,7 @@ async function _execute(target, activity) {
 
     // ── PORTFOLIO EXPOSURE CAP: don't over-commit bankroll ───────────────
     if (isBuy && config.maxPortfolioExposurePct > 0) {
-        const balance = await _getBalance();
+        const balance = prefetchedBalance;
         if (balance != null) {
             const totalExposure = positions.getTotalCostBasis();
             const bankroll = balance + totalExposure;
@@ -485,9 +489,9 @@ async function _execute(target, activity) {
         }
     }
 
-    // Balance check for buys
+    // Balance check for buys (uses prefetched balance from initial parallel fetch)
     if (isBuy) {
-        const balance = await _getBalance();
+        const balance = prefetchedBalance;
         if (balance != null && balance < config.minBalanceUsdc) {
             log.trade(TAG, { side, market: name, action: 'skip', reason: 'low_balance', balance });
             return { ok: false, reason: 'low_balance' };
@@ -503,20 +507,26 @@ async function _execute(target, activity) {
     const refPrice = execPrice?.avgPrice ?? mid;
 
     // ── SMART ROUTING: Check complementary token for better fill ──────────
+    // Complement book is fetched lazily here (not in initial batch) because we
+    // need the market object first to know the complement tokenId. However the
+    // fetch itself overlaps with nothing, so start it early and await later.
     let useComplement = false;
     let complementTokenId = null;
+    let _compBookPromise = null;
     if (config.useSmartRouting && market) {
         complementTokenId = getComplementaryToken(market, tokenId);
         if (complementTokenId) {
-            try {
-                const compBook = await getOrderBook(complementTokenId);
-                // If we want to BUY token A, we can also SELL token B (complement)
-                // BUY A at price P is equivalent to SELL B at price (1-P)
+            _compBookPromise = getOrderBook(complementTokenId).catch(() => null);
+        }
+    }
+    if (_compBookPromise) {
+        try {
+            const compBook = await _compBookPromise;
+            if (compBook) {
                 const compSide = isBuy ? 'SELL' : 'BUY';
-                const compAmount = isBuy ? (refPrice > 0 ? amount / refPrice : 0) : amount; // shares for complement
+                const compAmount = isBuy ? (refPrice > 0 ? amount / refPrice : 0) : amount;
                 const compExec = getExecutionPriceFromBook(compBook, compSide, compAmount);
                 if (compExec) {
-                    // Compare: for BUY, lower is better; for SELL, higher is better
                     const directCost = refPrice;
                     const complementCost = 1 - compExec.avgPrice;
                     if (isBuy && complementCost < directCost * 0.995) {
@@ -527,9 +537,9 @@ async function _execute(target, activity) {
                         log.info(TAG, `  Smart route: complement gains ${((complementCost - directCost) / directCost * 100).toFixed(1)}%`);
                     }
                 }
-            } catch {
-                // Smart routing is best-effort, fall through to direct
             }
+        } catch {
+            // Smart routing is best-effort
         }
     }
 
@@ -773,6 +783,8 @@ export async function dryRunCopyTrade(target, activity) {
     if (skipReason) {
         return { dryRun: true, side, amount: 0, reason: skipReason };
     }
+
+    const dedupKey = `${transactionHash || 'no-tx'}:${tokenId}:${side}`;
 
     // Fetch market + book for smart filtering
     let market = null;

@@ -56,11 +56,16 @@ async function _checkPositions() {
         const allPositions = positions.getAll();
         if (allPositions.length === 0) return;
 
-        for (const pos of allPositions) {
+        // Fetch all midpoints in parallel (avoid sequential API calls per position)
+        const midpoints = await Promise.all(
+            allPositions.map(pos => getMidpoint(pos.tokenId).catch(() => null))
+        );
+
+        for (let i = 0; i < allPositions.length; i++) {
             try {
-                await _evaluatePosition(pos);
+                await _evaluatePosition(allPositions[i], midpoints[i]);
             } catch (err) {
-                log.debug('EXIT', `Check failed for ...${pos.tokenId.slice(-12)}: ${err.message}`);
+                log.debug('EXIT', `Check failed for ...${allPositions[i].tokenId.slice(-12)}: ${err.message}`);
             }
         }
     } finally {
@@ -68,18 +73,11 @@ async function _checkPositions() {
     }
 }
 
-async function _evaluatePosition(pos) {
+async function _evaluatePosition(pos, prefetchedMid) {
     const { tokenId, shares, costBasis, avgEntry, market: marketName } = pos;
     if (shares <= 0.0001 || costBasis <= 0) return;
 
-    // Get live price
-    let mid;
-    try {
-        mid = await getMidpoint(tokenId);
-    } catch {
-        return; // can't price it, skip
-    }
-
+    const mid = prefetchedMid;
     if (mid == null || mid <= 0) return;
 
     const currentValue = shares * mid;

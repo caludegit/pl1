@@ -56,7 +56,7 @@ const config = {
     maxPriceDrift:   0.10,       // 10% skip if market moved since whale fill
     cooldownMs:      30_000,     // 30s  between copies of same token+wallet
     minOrderUsdc:    1,          // skip trades below $1
-    txBatchWindowMs: 400,        // ms to wait for partial fills in same tx
+    txBatchWindowMs: 200,        // ms to wait for partial fills in same tx (fills arrive near-simultaneously)
     watchdogIntervalMs: 60_000,
     watchdogMaxSilenceMs: 300_000,
     dryRun:          (env.DRY_RUN === 'false' || env.DRY_RUN === '0')
@@ -159,7 +159,7 @@ const config = {
 
     // ── Anti-front-running ───────────────────────────────────────────────────
     enableAntiSnipe:      true,     // add random delay to prevent being front-run
-    antiSnipeMaxMs:       1500,     // random 0-1500ms delay before placing order
+    antiSnipeMaxMs:       500,      // random 0-500ms delay (speed > stealth for copy trading)
 
     // ── Position tracking ─────────────────────────────────────────────────────
     syncPositionsOnStart: true,
