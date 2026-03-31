@@ -19,6 +19,7 @@ import config from './config.js';
 import { positions } from './positions.js';
 import { whaleTracker } from './whale-tracker.js';
 import * as log from './logger.js';
+import { HttpError, TransientError } from './errors.js';
 import {
     getMarketByCondition, getMarketByToken, extractMarketParams,
     getMidpoint, getOrderBook, getExecutionPriceFromBook,
@@ -144,7 +145,7 @@ function _getSignalBoost(tokenId, side) {
 }
 
 // ── Tick alignment (with proper Polymarket bounds clamping) ───────────────────
-function _alignToTick(price, tickSize, roundUp) {
+export function _alignToTick(price, tickSize, roundUp) {
     const tick = parseFloat(tickSize);
     const decimals = tickSize.split('.')[1]?.length || 0;
     const aligned = roundUp
@@ -156,7 +157,7 @@ function _alignToTick(price, tickSize, roundUp) {
 }
 
 // ── Price validation (proper Polymarket bounds) ───────────────────────────────
-function _priceValid(price, tickSize) {
+export function _priceValid(price, tickSize) {
     const tick = parseFloat(tickSize);
     return price >= tick && price <= 1 - tick;
 }
@@ -276,6 +277,45 @@ export function getClient() { return client; }
 export function getWalletAddress() { return _walletAddress; }
 export function recordExitPnl(pnl) { _recordDailyPnl(pnl); }
 
+// ── Shared preflight checks (kill switch, dedup, cooldowns, guards) ──────────
+// Returns null if all checks pass, or a reason string if the trade should be skipped.
+function _preflight(target, activity, TAG) {
+    const { address: wallet, label } = target;
+    const { asset: tokenId, side, transactionHash } = activity;
+    const isBuy = side === 'BUY';
+
+    if (config.killSwitch) return 'kill_switch';
+
+    const dedupKey = `${transactionHash || 'no-tx'}:${tokenId}:${side}`;
+    if (_recentOrders.has(dedupKey)) return 'duplicate';
+
+    _recordSignal(tokenId, wallet, side);
+
+    if (!isBuy && !config.shouldCopySells(target)) return 'sells_disabled';
+    if (!isBuy && config.sellOnlyIfHeld && !positions.hasPosition(tokenId)) return 'not_held';
+
+    if (isBuy && config.maxOpenPositions > 0 && !positions.hasPosition(tokenId)) {
+        if (positions.getCount() >= config.maxOpenPositions) return 'max_positions';
+    }
+
+    if (isBuy && _drawdownHalted) return 'drawdown_breaker';
+
+    if (isBuy && config.enableStreakCooldown) {
+        const cooldownUntil = _streakCooldowns.get(wallet);
+        if (cooldownUntil && Date.now() < cooldownUntil) return 'streak_cooldown';
+        const whaleStats = whaleTracker.getStats(wallet);
+        if (whaleStats && whaleStats.currentStreak <= -(config.maxLosingStreak || 3)) {
+            _streakCooldowns.set(wallet, Date.now() + (config.streakCooldownMs || 3_600_000));
+            log.warn(TAG, `STREAK COOLDOWN — ${label} has ${Math.abs(whaleStats.currentStreak)} consecutive losses, pausing for ${(config.streakCooldownMs / 60_000).toFixed(0)}min`);
+            return 'streak_cooldown';
+        }
+    }
+
+    if (_onCooldown(wallet, tokenId)) return 'cooldown';
+
+    return null;
+}
+
 // ── Public entry: live trade ──────────────────────────────────────────────────
 export async function placeCopyTrade(target, activity) {
     if (!client) throw new Error('Call initTrader() first');
@@ -285,65 +325,10 @@ export async function placeCopyTrade(target, activity) {
     const TAG = label;
     const isBuy = side === 'BUY';
 
-    // ── KILL SWITCH: halt all new trades immediately ─────────────────────
-    if (config.killSwitch) {
-        log.trade(TAG, { side, tokenId, action: 'skip', reason: 'kill_switch' });
-        return { ok: false, reason: 'kill_switch' };
-    }
-
-    // ── IDEMPOTENCY: prevent duplicate order placement from same event ───
-    const dedupKey = `${transactionHash || 'no-tx'}:${tokenId}:${side}`;
-    if (_recentOrders.has(dedupKey)) {
-        log.debug(TAG, `SKIP duplicate order for ${side} ...${tokenId.slice(-12)}`);
-        return { ok: false, reason: 'duplicate' };
-    }
-
-    // Record signal for multi-whale detection
-    _recordSignal(tokenId, wallet, side);
-
-    if (!isBuy && !config.shouldCopySells(target)) {
-        log.trade(TAG, { side, tokenId, action: 'skip', reason: 'sells_disabled' });
-        return { ok: false, reason: 'sells_disabled' };
-    }
-
-    if (!isBuy && config.sellOnlyIfHeld && !positions.hasPosition(tokenId)) {
-        log.trade(TAG, { side, tokenId, action: 'skip', reason: 'not_held' });
-        return { ok: false, reason: 'not_held' };
-    }
-
-    if (isBuy && config.maxOpenPositions > 0 && !positions.hasPosition(tokenId)) {
-        if (positions.getCount() >= config.maxOpenPositions) {
-            log.trade(TAG, { side, tokenId, action: 'skip', reason: 'max_positions' });
-            return { ok: false, reason: 'max_positions' };
-        }
-    }
-
-    // ── DRAWDOWN BREAKER: halt buys if daily losses exceed threshold ──────
-    if (isBuy && _drawdownHalted) {
-        log.trade(TAG, { side, tokenId, action: 'skip', reason: 'drawdown_breaker' });
-        return { ok: false, reason: 'drawdown_breaker' };
-    }
-
-    // ── LOSING STREAK COOLDOWN: pause copying whale on cold streak ───────
-    if (isBuy && config.enableStreakCooldown) {
-        const cooldownUntil = _streakCooldowns.get(wallet);
-        if (cooldownUntil && Date.now() < cooldownUntil) {
-            log.trade(TAG, { side, tokenId, action: 'skip', reason: 'streak_cooldown' });
-            return { ok: false, reason: 'streak_cooldown' };
-        }
-        // Check current streak from whale tracker
-        const whaleStats = whaleTracker.getStats(wallet);
-        if (whaleStats && whaleStats.currentStreak <= -(config.maxLosingStreak || 3)) {
-            _streakCooldowns.set(wallet, Date.now() + (config.streakCooldownMs || 3_600_000));
-            log.warn(TAG, `STREAK COOLDOWN — ${label} has ${Math.abs(whaleStats.currentStreak)} consecutive losses, pausing for ${(config.streakCooldownMs / 60_000).toFixed(0)}min`);
-            log.trade(TAG, { side, tokenId, action: 'skip', reason: 'streak_cooldown' });
-            return { ok: false, reason: 'streak_cooldown' };
-        }
-    }
-
-    if (_onCooldown(wallet, tokenId)) {
-        log.trade(TAG, { side, tokenId, action: 'skip', reason: 'cooldown' });
-        return { ok: false, reason: 'cooldown' };
+    const skipReason = _preflight(target, activity, TAG);
+    if (skipReason) {
+        log.trade(TAG, { side, tokenId, action: 'skip', reason: skipReason });
+        return { ok: false, reason: skipReason };
     }
 
     if (!_tryLock(wallet, tokenId)) {
@@ -619,8 +604,9 @@ async function _execute(target, activity) {
                 break; // success, exit retry loop
             } catch (orderErr) {
                 const msg = orderErr.message || '';
-                const isTransient = msg.includes('timeout') || msg.includes('ECONNRESET') ||
-                    msg.includes('503') || msg.includes('502') || msg.includes('rate');
+                const isTransient = (orderErr instanceof HttpError && orderErr.retryable)
+                    || orderErr instanceof TransientError
+                    || msg.includes('timeout') || msg.includes('ECONNRESET');
                 if (isTransient && attempt < MAX_ORDER_RETRIES) {
                     log.warn(TAG, `Order attempt ${attempt + 1} failed (${msg}), retrying in ${(attempt + 1) * 500}ms...`);
                     await new Promise(r => setTimeout(r, (attempt + 1) * 500));
@@ -783,59 +769,9 @@ export async function dryRunCopyTrade(target, activity) {
     const isBuy = side === 'BUY';
     const TAG = `DRY:${label}`;
 
-    // Kill switch
-    if (config.killSwitch) {
-        return { dryRun: true, side, amount: 0, reason: 'kill_switch' };
-    }
-
-    // Idempotency
-    const dedupKey = `${transactionHash || 'no-tx'}:${tokenId}:${side}`;
-    if (_recentOrders.has(dedupKey)) {
-        return { dryRun: true, side, amount: 0, reason: 'duplicate' };
-    }
-
-    // Record signal even in dry-run
-    _recordSignal(tokenId, wallet, side);
-
-    if (!isBuy && !config.shouldCopySells(target)) {
-        log.debug(TAG, `SKIP sell (copySells=false)`);
-        return { dryRun: true, side, amount: 0, reason: 'sells_disabled' };
-    }
-
-    if (!isBuy && config.sellOnlyIfHeld && !positions.hasPosition(tokenId)) {
-        log.debug(TAG, `SKIP sell — not holding ...${tokenId.slice(-12)}`);
-        return { dryRun: true, side, amount: 0, reason: 'not_held' };
-    }
-
-    // Max positions check
-    if (isBuy && config.maxOpenPositions > 0 && !positions.hasPosition(tokenId)) {
-        if (positions.getCount() >= config.maxOpenPositions) {
-            log.debug(TAG, `SKIP BUY — max positions (${config.maxOpenPositions})`);
-            return { dryRun: true, side, amount: 0, reason: 'max_positions' };
-        }
-    }
-
-    // Drawdown breaker
-    if (isBuy && _drawdownHalted) {
-        return { dryRun: true, side, amount: 0, reason: 'drawdown_breaker' };
-    }
-
-    // Losing streak cooldown
-    if (isBuy && config.enableStreakCooldown) {
-        const cooldownUntil = _streakCooldowns.get(wallet);
-        if (cooldownUntil && Date.now() < cooldownUntil) {
-            return { dryRun: true, side, amount: 0, reason: 'streak_cooldown' };
-        }
-        const whaleStats = whaleTracker.getStats(wallet);
-        if (whaleStats && whaleStats.currentStreak <= -(config.maxLosingStreak || 3)) {
-            _streakCooldowns.set(wallet, Date.now() + (config.streakCooldownMs || 3_600_000));
-            log.warn(TAG, `STREAK COOLDOWN — ${label} on losing streak`);
-            return { dryRun: true, side, amount: 0, reason: 'streak_cooldown' };
-        }
-    }
-
-    if (_onCooldown(wallet, tokenId)) {
-        return { dryRun: true, side, amount: 0, reason: 'cooldown' };
+    const skipReason = _preflight(target, activity, TAG);
+    if (skipReason) {
+        return { dryRun: true, side, amount: 0, reason: skipReason };
     }
 
     // Fetch market + book for smart filtering

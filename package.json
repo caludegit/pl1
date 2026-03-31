@@ -9,7 +9,11 @@
     "test:unit": "node src/unit-test.js",
     "simulate": "node src/simulate.js",
     "positions": "node src/show-positions.js",
-    "portfolio": "node src/show-portfolio.js"
+    "portfolio": "node src/show-portfolio.js",
+    "lint": "eslint src/"
+  },
+  "devDependencies": {
+    "eslint": "^9"
   },
   "dependencies": {
     "@polymarket/clob-client": "^5",

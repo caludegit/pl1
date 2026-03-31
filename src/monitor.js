@@ -189,9 +189,12 @@ export class OnChainMonitor {
 
     _scheduleReconnect() {
         clearTimeout(this._reconnectTimer);
+        // Add ±20% jitter to prevent thundering herd on provider outages
+        const jitter = 1 + (Math.random() * 0.4 - 0.2);
+        const delay = Math.round(this._reconnectDelay * jitter);
         this._reconnectTimer = setTimeout(() => {
             if (this.running) this._connect();
-        }, this._reconnectDelay);
+        }, delay);
         this._reconnectDelay = Math.min(this._reconnectDelay * 1.5, 30_000);
     }
 

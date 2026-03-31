@@ -3,7 +3,7 @@
 // Tests all pure / offline logic: config, positions, stats, api helpers, whale-tracker
 // Usage: node src/unit-test.js
 
-import assert from 'assert/strict';
+import assert from 'node:assert/strict';
 
 // ── Test harness ──────────────────────────────────────────────────────────────
 let passed = 0;

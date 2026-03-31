@@ -7,8 +7,8 @@
 //   PRIVATE_KEY=0x... WSS_URL=wss://... node src/index.js
 //   # or just create a .env file (auto-loaded)
 
-import { readFileSync } from 'fs';
-import { resolve } from 'path';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 // ── Minimal .env loader (no external dependency) ─────────────────────────────
 function loadEnvFile() {

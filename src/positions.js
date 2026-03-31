@@ -7,73 +7,46 @@
 //   - Entry/exit timestamps
 //   - Persists to disk (debounced) and syncs from chain on startup
 
-import { readFile, writeFile, mkdir } from 'fs/promises';
-import { dirname } from 'path';
 import config from './config.js';
 import { fetchPositions, getMidpoint } from './api.js';
 import * as log from './logger.js';
-
-const SAVE_DEBOUNCE = 2_000;
+import { JsonStore } from './store.js';
 
 class PositionManager {
     constructor() {
         this.positions = new Map();   // tokenId → position
         this._closedPnl = 0;         // accumulated P&L from fully exited positions
-        this._saveTimer = null;
-        this._dirty = false;
+        this._store = new JsonStore(config.positionFile, { debounceMs: 2_000, tag: 'POS' });
         this._syncing = false;       // mutex: true while chain sync is running
     }
 
     // ── Load from disk ─────────────────────────────────────────────────────
     async load() {
         try {
-            const raw = await readFile(config.positionFile, 'utf-8');
-            const data = JSON.parse(raw);
-            if (data.positions) {
+            const data = await this._store.load();
+            if (data?.positions) {
                 for (const p of data.positions) {
                     if (p.tokenId && p.shares > 0) this.positions.set(p.tokenId, p);
                 }
             }
-            this._closedPnl = data.closedPnl || 0;
+            this._closedPnl = data?.closedPnl || 0;
             log.info('POS', `Loaded ${this.positions.size} position(s), closed P&L: $${this._closedPnl.toFixed(2)}`);
         } catch (err) {
-            if (err.code !== 'ENOENT') log.warn('POS', `Load failed: ${err.message}`);
-            else log.info('POS', 'Starting with empty position book');
+            log.warn('POS', `Load failed: ${err.message}`);
         }
     }
 
     // ── Save to disk (debounced) ───────────────────────────────────────────
     _scheduleSave() {
-        this._dirty = true;
-        if (this._saveTimer) return;
-        this._saveTimer = setTimeout(() => {
-            this._saveTimer = null;
-            this._doSave();
-        }, SAVE_DEBOUNCE);
-        // Don't prevent process exit in CLI scripts (show-positions, simulate, etc.)
-        this._saveTimer.unref();
-    }
-
-    async _doSave() {
-        if (!this._dirty) return;
-        this._dirty = false;
-        const payload = {
+        this._store.scheduleSave(() => ({
             closedPnl: this._closedPnl,
             positions: [...this.positions.values()],
             savedAt: new Date().toISOString(),
-        };
-        try {
-            await mkdir(dirname(config.positionFile), { recursive: true });
-            await writeFile(config.positionFile, JSON.stringify(payload, null, 2));
-        } catch (err) {
-            log.warn('POS', `Save failed: ${err.message}`);
-        }
+        }));
     }
 
     async flush() {
-        clearTimeout(this._saveTimer);
-        this._saveTimer = null;
-        await this._doSave();
+        await this._store.flush();
     }
 
     // ── Sync from chain (with mutex to prevent race with recordBuy/recordSell) ─

@@ -9,26 +9,27 @@
 //   - Proper retry with error classification
 
 import config from './config.js';
+import { HttpError } from './errors.js';
 
 const TIMEOUT     = 8_000;
 const MAX_RETRIES = 3;
 const CACHE_TTL   = 5 * 60_000;
 
 // ── Simple rate limiter to avoid API bans ────────────────────────────────────
-const _requestTimes = [];
+// Ring buffer — O(1) per call instead of O(n) shift()-based approach
 const MAX_REQUESTS_PER_SEC = 8;
+const _requestRing = new Float64Array(MAX_REQUESTS_PER_SEC);
+let _ringIdx = 0;
 
 async function _rateLimit() {
     const now = Date.now();
-    // Remove timestamps older than 1 second
-    while (_requestTimes.length > 0 && _requestTimes[0] < now - 1000) {
-        _requestTimes.shift();
-    }
-    if (_requestTimes.length >= MAX_REQUESTS_PER_SEC) {
-        const waitMs = _requestTimes[0] + 1000 - now;
+    const oldest = _requestRing[_ringIdx];
+    if (oldest > 0 && now - oldest < 1000) {
+        const waitMs = oldest + 1000 - now;
         if (waitMs > 0) await new Promise(r => setTimeout(r, waitMs));
     }
-    _requestTimes.push(Date.now());
+    _requestRing[_ringIdx] = Date.now();
+    _ringIdx = (_ringIdx + 1) % MAX_REQUESTS_PER_SEC;
 }
 
 // ── Fetch with timeout ────────────────────────────────────────────────────────
@@ -41,19 +42,12 @@ async function fetchT(url, opts = {}) {
 }
 
 // ── Retry wrapper ─────────────────────────────────────────────────────────────
-function httpError(status, msg) {
-    const e = new Error(msg);
-    e._status = status;
-    return e;
-}
-
 async function withRetry(fn, label, retries = MAX_RETRIES) {
     for (let i = 0; i < retries; i++) {
         try {
             return await fn();
         } catch (err) {
-            const status = err._status;
-            const nonRetryable = status && status >= 400 && status < 500 && status !== 429;
+            const nonRetryable = err instanceof HttpError && err.clientError;
             if (nonRetryable || i === retries - 1) throw err;
             const delay = 300 * 2 ** i;
             await new Promise(r => setTimeout(r, delay));
@@ -75,7 +69,14 @@ function cacheGet(key) {
     return entry.data;
 }
 
+const MAX_CACHE_ENTRIES = 500;
+
 function cacheSet(key, data, ttl = CACHE_TTL) {
+    // Evict oldest entries if at capacity (simple size cap prevents unbounded growth)
+    if (cache.size >= MAX_CACHE_ENTRIES && !cache.has(key)) {
+        const firstKey = cache.keys().next().value;
+        cache.delete(firstKey);
+    }
     cache.set(key, { data, expiresAt: Date.now() + ttl });
 }
 
@@ -104,9 +105,9 @@ export async function getMarketByCondition(conditionId) {
     if (cached) return cached;
     return dedup(k, () => withRetry(async () => {
         const res = await fetchT(`${config.gammaHost}/markets?condition_id=${conditionId}`);
-        if (!res.ok) throw httpError(res.status, `Gamma condition ${res.status}`);
+        if (!res.ok) throw new HttpError(res.status, `Gamma condition ${res.status}`);
         const list = await res.json();
-        if (!list?.length) throw httpError(404, `No market for condition ${conditionId}`);
+        if (!list?.length) throw new HttpError(404, `No market for condition ${conditionId}`);
         cacheSet(k, list[0]);
         return list[0];
     }, `getMarketByCondition`));
@@ -125,7 +126,7 @@ export async function getMarketByToken(tokenId) {
                 if (list?.length) { cacheSet(k, list[0]); return list[0]; }
             }
         }
-        throw httpError(404, `No market for token ${tokenId}`);
+        throw new HttpError(404, `No market for token ${tokenId}`);
     }, `getMarketByToken`));
 }
 
@@ -152,7 +153,7 @@ export function getComplementaryToken(market, tokenId) {
 // ── CLOB: midpoint (never cached — always live) ──────────────────────────────
 export async function getMidpoint(tokenId) {
     const res = await fetchT(`${config.clobHost}/midpoint?token_id=${tokenId}`);
-    if (!res.ok) throw httpError(res.status, `CLOB midpoint ${res.status}`);
+    if (!res.ok) throw new HttpError(res.status, `CLOB midpoint ${res.status}`);
     const data = await res.json();
     const mid = parseFloat(data.mid);
     if (isNaN(mid)) throw new Error(`Invalid midpoint for token ${tokenId}: ${data.mid}`);
@@ -162,7 +163,7 @@ export async function getMidpoint(tokenId) {
 // ── CLOB: order book ─────────────────────────────────────────────────────────
 export async function getOrderBook(tokenId) {
     const res = await fetchT(`${config.clobHost}/book?token_id=${tokenId}`);
-    if (!res.ok) throw httpError(res.status, `CLOB book ${res.status}`);
+    if (!res.ok) throw new HttpError(res.status, `CLOB book ${res.status}`);
     return res.json();
 }
 
@@ -239,7 +240,7 @@ export function getExecutionPriceFromBook(book, side, amount) {
 export async function fetchActivity(address, { limit = 20 } = {}) {
     const url = `${config.dataApiHost}/activity?user=${address}&type=TRADE&limit=${limit}`;
     const res = await fetchT(url);
-    if (!res.ok) throw httpError(res.status, `Data API ${res.status}`);
+    if (!res.ok) throw new HttpError(res.status, `Data API ${res.status}`);
     return res.json();
 }
 
@@ -247,7 +248,7 @@ export async function fetchActivity(address, { limit = 20 } = {}) {
 export async function fetchPositions(address) {
     const url = `${config.dataApiHost}/positions?user=${address}`;
     const res = await fetchT(url);
-    if (!res.ok) throw httpError(res.status, `Positions API ${res.status}`);
+    if (!res.ok) throw new HttpError(res.status, `Positions API ${res.status}`);
     return res.json();
 }
 

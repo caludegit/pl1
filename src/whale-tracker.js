@@ -12,19 +12,15 @@
 //   - Persisted to disk across restarts
 //   - Minimum sample size before adjusting
 
-import { readFile, writeFile, mkdir } from 'fs/promises';
-import { dirname } from 'path';
 import config from './config.js';
 import * as log from './logger.js';
-
-const SAVE_DEBOUNCE = 5_000;
+import { JsonStore } from './store.js';
 
 class WhaleTracker {
     constructor() {
         // Map<walletAddress, WhaleRecord>
         this.whales = new Map();
-        this._saveTimer = null;
-        this._dirty = false;
+        this._store = new JsonStore(config.whaleTrackFile || 'data/whale-tracker.json', { debounceMs: 5_000, tag: 'WHALE' });
     }
 
     // ── WhaleRecord structure ──────────────────────────────────────────────
@@ -227,62 +223,36 @@ class WhaleTracker {
 
     // ── Persistence ────────────────────────────────────────────────────────
     _scheduleSave() {
-        this._dirty = true;
-        if (this._saveTimer) return;
-        this._saveTimer = setTimeout(() => {
-            this._saveTimer = null;
-            this._doSave();
-        }, SAVE_DEBOUNCE);
-        this._saveTimer.unref();
-    }
-
-    async _doSave() {
-        if (!this._dirty) return;
-        this._dirty = false;
-        const filePath = config.whaleTrackFile || 'data/whale-tracker.json';
-        const payload = {
+        this._store.scheduleSave(() => ({
             whales: Object.fromEntries(
                 [...this.whales.entries()].map(([k, v]) => [k, {
                     ...v,
-                    // Only keep recent trades for storage efficiency
                     trades: v.trades.slice(-200),
                 }])
             ),
             savedAt: new Date().toISOString(),
-        };
-        try {
-            await mkdir(dirname(filePath), { recursive: true });
-            await writeFile(filePath, JSON.stringify(payload, null, 2));
-        } catch (err) {
-            log.warn('WHALE', `Save failed: ${err.message}`);
-        }
+        }));
     }
 
     async flush() {
-        clearTimeout(this._saveTimer);
-        this._saveTimer = null;
-        await this._doSave();
+        await this._store.flush();
     }
 
     async load() {
-        const filePath = config.whaleTrackFile || 'data/whale-tracker.json';
         try {
-            const raw = await readFile(filePath, 'utf-8');
-            const data = JSON.parse(raw);
-            if (data.whales) {
+            const data = await this._store.load();
+            if (data?.whales) {
                 for (const [address, record] of Object.entries(data.whales)) {
                     this.whales.set(address, {
                         ...this._newRecord(address, record.label),
                         ...record,
                     });
-                    // Recalculate derived stats (in case formula changed)
                     this._recalculate(this.whales.get(address));
                 }
             }
             log.info('WHALE', `Loaded ${this.whales.size} whale record(s)`);
         } catch (err) {
-            if (err.code !== 'ENOENT') log.warn('WHALE', `Load failed: ${err.message}`);
-            else log.info('WHALE', 'Starting with empty whale tracker');
+            log.warn('WHALE', `Load failed: ${err.message}`);
         }
     }
 

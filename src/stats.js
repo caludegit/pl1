@@ -2,15 +2,15 @@
 //
 // Persists to disk on shutdown and loads on startup so stats survive restarts.
 
-import { readFile, writeFile, mkdir } from 'fs/promises';
-import { dirname } from 'path';
 import config from './config.js';
 import * as log from './logger.js';
+import { JsonStore } from './store.js';
 
 class Stats {
     constructor() {
         this._reset();
         this._interval = null;
+        this._store = new JsonStore(config.statsFile, { tag: 'STATS' });
     }
 
     _reset() {
@@ -81,8 +81,8 @@ class Stats {
     // ── Persistence ───────────────────────────────────────────────────────
     async load() {
         try {
-            const raw = await readFile(config.statsFile, 'utf-8');
-            const data = JSON.parse(raw);
+            const data = await this._store.load();
+            if (!data) return;
             // Restore previous session stats (replace, don't accumulate — prevents double-counting)
             this.events     = data.events || 0;
             this.buyEvents  = data.buyEvents || 0;
@@ -94,7 +94,6 @@ class Stats {
             this.buys.totalUsdc = data.buys?.totalUsdc || 0;
             this.sells.filled    = data.sells?.filled || 0;
             this.sells.totalUsdc = data.sells?.totalUsdc || 0;
-            // Restore per-target stats
             if (data.byTarget) {
                 for (const [label, s] of Object.entries(data.byTarget)) {
                     this.byTarget.set(label, { ...s });
@@ -107,22 +106,19 @@ class Stats {
             }
             log.info('STATS', `Loaded stats: ${this.events} events, ${this.trades.filled} fills`);
         } catch (err) {
-            if (err.code !== 'ENOENT') log.warn('STATS', `Load failed: ${err.message}`);
+            log.warn('STATS', `Load failed: ${err.message}`);
         }
     }
 
     async save() {
-        try {
-            await mkdir(dirname(config.statsFile), { recursive: true });
-            await writeFile(config.statsFile, JSON.stringify(this.getSummary(), null, 2));
-        } catch (err) {
-            log.warn('STATS', `Save failed: ${err.message}`);
-        }
+        this._store.scheduleSave(() => this.getSummary());
+        await this._store.flush();
     }
 
     // ── Reporting ─────────────────────────────────────────────────────────
     startReporting(intervalMs = 300_000) {
         this._interval = setInterval(() => this.print(), intervalMs);
+        this._interval.unref();
     }
 
     stop() { clearInterval(this._interval); }

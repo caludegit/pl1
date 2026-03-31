@@ -15,8 +15,8 @@
 //   kill -USR1 <pid>     toggle dryRun
 //   kill -USR2 <pid>     print stats + positions + portfolio
 
-import { writeFile, mkdir } from 'fs/promises';
-import { dirname } from 'path';
+import { writeFile, mkdir } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import config from './config.js';
 import { initTrader, placeCopyTrade, dryRunCopyTrade, getWalletAddress, getClient } from './trader.js';
 import { OnChainMonitor } from './monitor.js';

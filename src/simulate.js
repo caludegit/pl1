@@ -289,22 +289,8 @@ console.log('');
 // ── 4. Tick Alignment & Price Validation ─────────────────────────────────────
 console.log('  [Tick Alignment & Price Bounds]');
 
-// We need to test the internal _alignToTick function
-// Since it's not exported, let's replicate the logic and test it
-function _alignToTick(price, tickSize, roundUp) {
-    const tick = parseFloat(tickSize);
-    const decimals = tickSize.split('.')[1]?.length || 0;
-    const aligned = roundUp
-        ? Math.ceil(price / tick) * tick
-        : Math.floor(price / tick) * tick;
-    const clamped = Math.max(tick, Math.min(aligned, 1 - tick));
-    return parseFloat(clamped.toFixed(decimals));
-}
-
-function _priceValid(price, tickSize) {
-    const tick = parseFloat(tickSize);
-    return price >= tick && price <= 1 - tick;
-}
+// Now exported from trader.js — test the real production code
+import { _alignToTick, _priceValid } from './trader.js';
 
 // Basic alignment
 {

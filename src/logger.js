@@ -6,8 +6,8 @@
 //   - Trade journal (trades.jsonl) with rotation
 //   - Optional webhook notifications for fills, errors, P&L
 
-import { appendFile, stat, rename, mkdir } from 'fs/promises';
-import { dirname } from 'path';
+import { appendFile, stat, rename, mkdir } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import config from './config.js';
 
 const LEVELS = { debug: 0, info: 1, warn: 2, error: 3 };
@@ -59,7 +59,8 @@ async function _flush() {
                 await appendFile(config.logFile, lines.join(''));
             } catch (e) {
                 // Don't lose lines on transient errors — push them back
-                _buf.unshift(...lines);
+                // concat avoids spread which can RangeError on large arrays
+                _buf = lines.concat(_buf);
                 break; // stop retrying this cycle, will retry next call
             }
         }
