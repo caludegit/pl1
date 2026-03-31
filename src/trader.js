@@ -960,7 +960,8 @@ export async function dryRunCopyTrade(target, activity) {
 
     log.trade(TAG, { side, market: name, action: 'dry_run', amount, price, mid, role, fillCount, signalBoost, whaleMultiplier });
     const estFee = isBuy ? amount * 0.002 : amount * mid * 0.002; // ~20bps taker estimate
-    const estProfit = isBuy ? (mid < 0.5 ? (1 - mid) * (amount / mid) - amount : 0) : amount * mid - (positions.getPosition(tokenId)?.costBasis || 0);
+    const pos = positions.getPosition(tokenId);
+    const estProfit = isBuy ? (1 - mid) * (amount / mid) : amount * mid - amount * (pos?.avgEntry || 0);
     log.info(TAG, `[DRY RUN] Would ${side} ${amount} ${isBuy ? 'USDC' : 'shares'} of "${name.slice(0, 50)}" at $${mid.toFixed(4)} | Est. profit: $${estProfit.toFixed(2)} | Fee: $${estFee.toFixed(4)}${holdInfo}${boostStr}${whaleStr}`);
 
     // Track positions and daily spend in dry-run

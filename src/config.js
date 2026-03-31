@@ -238,8 +238,8 @@ config.validate = function () {
     if (!['ratio', 'proportional', 'all'].includes(this.sellMode)) {
         errors.push("sellMode must be 'ratio', 'proportional', or 'all'");
     }
-    if (this.maxBuyPrice <= 0.5 || this.maxBuyPrice > 0.99) errors.push('maxBuyPrice must be 0.5–0.99');
-    if (this.minSellPrice < 0.01 || this.minSellPrice >= 0.5) errors.push('minSellPrice must be 0.01–0.5');
+    if (this.maxBuyPrice < 0.5 || this.maxBuyPrice > 0.99) errors.push('maxBuyPrice must be 0.5–0.99');
+    if (this.minSellPrice < 0.01 || this.minSellPrice > 0.5) errors.push('minSellPrice must be 0.01–0.5');
     if (!['fak', 'gtc'].includes(this.orderMode)) errors.push("orderMode must be 'fak' or 'gtc'");
     if (this.maxPositionUsdc > 0 && this.maxDailyUsdc > 0 && this.maxPositionUsdc > this.maxDailyUsdc) {
         errors.push(`maxPositionUsdc ($${this.maxPositionUsdc}) should not exceed maxDailyUsdc ($${this.maxDailyUsdc})`);
