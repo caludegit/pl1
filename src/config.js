@@ -79,7 +79,7 @@ const config = {
     // ── Smart order execution ─────────────────────────────────────────────────
     // 'fak' = Fill-and-Kill (instant, partial fills OK)
     // 'gtc' = Good-til-Cancel limit order (better price, may not fill)
-    orderMode:       'fak',      // 'fak' for speed, 'gtc' for better prices
+    orderMode:       'gtc',      // 'gtc' for limit orders (better prices), 'fak' for instant fills
     // For GTC mode: how far inside the spread to place limit orders
     gtcOffsetPct:    0.01,       // 1% better than mid (buy lower, sell higher)
     gtcTimeoutMs:    15_000,     // cancel unfilled GTC orders after 15s
@@ -155,7 +155,7 @@ const config = {
 
     // ── Market quality filter ────────────────────────────────────────────────
     enableMarketQuality:  true,     // skip low-quality markets
-    minMarketVolume:      5000,     // skip markets with < $5000 total volume
+    minMarketVolume:      500,      // skip markets with < $500 total volume (lowered for 5-min markets)
 
     // ── Anti-front-running ───────────────────────────────────────────────────
     enableAntiSnipe:      true,     // add random delay to prevent being front-run
