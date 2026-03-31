@@ -56,7 +56,7 @@ const config = {
     maxPriceDrift:   0.10,       // 10% skip if market moved since whale fill
     cooldownMs:      30_000,     // 30s  between copies of same token+wallet
     minOrderUsdc:    1,          // skip trades below $1
-    txBatchWindowMs: 200,        // ms to wait for partial fills in same tx (fills arrive near-simultaneously)
+    txBatchWindowMs: 500,        // ms to wait for partial fills in same tx (WSS delivers 200-350ms apart)
     watchdogIntervalMs: 60_000,
     watchdogMaxSilenceMs: 300_000,
     dryRun:          (env.DRY_RUN === 'false' || env.DRY_RUN === '0')
