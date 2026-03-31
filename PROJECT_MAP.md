@@ -2,304 +2,297 @@
 
 A real-time copy-trading bot that detects and mirrors trades from profitable Polymarket whale wallets on the Polygon blockchain.
 
-## File Listing
+---
 
-| File | Description |
-|------|-------------|
-| `package.json` | Project metadata, npm scripts (`start`, `test`, `simulate`, `positions`, `portfolio`), and dependencies |
-| `package-lock.json` | Locked dependency tree for reproducible installs |
-| `.env.example` | Template for required/optional environment variables (private key, WSS URL, etc.) |
-| `.gitignore` | Ignores `node_modules/`, `data/`, `.env`, and `*.log` from version control |
-| `Dockerfile` | Alpine Node 20 container image that runs `src/index.js` with a persistent `data/` volume |
-| `docker-compose.yml` | Single-service Compose file to build and run the bot with `.env` and `data/` volume |
-| `guide.md` | Comprehensive setup guide covering installation, configuration, deployment, and troubleshooting |
-| `guide.md.bak` | Backup copy of the setup guide |
-| **`src/index.js`** | Entry point — bootstraps the bot, wires modules together, handles process signals |
-| **`src/config.js`** | All configuration: whale targets, risk controls, smart filters, auto-exit params, API endpoints |
-| **`src/trader.js`** | Order execution engine with smart filters, Kelly sizing, slippage control, and retry logic |
-| **`src/monitor.js`** | On-chain event listener — connects via WebSocket to detect whale trades in real time |
-| **`src/api.js`** | Polymarket REST/WebSocket API client with rate limiting, TTL cache, and request deduplication |
-| **`src/positions.js`** | Position state management, P&L tracking, and on-chain sync |
-| **`src/exit-manager.js`** | Auto-exit engine: stop-loss, take-profit, trailing stop, profit ratchet, time/EV exits |
-| **`src/stats.js`** | Runtime statistics collector (trades, fills, skips, daily spend) |
-| **`src/logger.js`** | Structured logging with log levels, file rotation, and Slack/Discord webhook alerts |
-| **`src/whale-tracker.js`** | Tracks per-whale win rate and performance; adjusts copy ratios over time |
-| **`src/test.js`** | Connectivity tests — verifies RPC, Polymarket API access, and order book analysis |
-| **`src/simulate.js`** | Offline logic test suite (149 tests) covering filters, exits, position math, and whale tracking |
-| **`src/audit-test.js`** | Audit test suite — tests auth, market fetch, copy logic, dry-run orders, and benchmarks |
-| **`src/show-positions.js`** | CLI utility to display current open positions |
-| **`src/show-portfolio.js`** | CLI utility to display portfolio summary and P&L |
+## 1. Full File Tree
 
-## Runtime Data (`data/` — git-ignored, auto-created)
-
-| File | Description |
-|------|-------------|
-| `data/positions.json` | Persisted open position state |
-| `data/stats.json` | Trade statistics |
-| `data/health.json` | Health check output (updated every 60s) |
-| `data/trades.jsonl` | Append-only trade journal (JSON Lines) |
-| `data/whale-tracker.json` | Per-whale performance and win-rate data |
-
-## Code Walkthrough
-
-### `src/config.js`
-
-**Purpose:** Central configuration module. Loads `.env` files, defines every tunable parameter, normalizes whale targets, and validates the full config before the bot starts.
-
-**Exports:**
-- `default` — the `config` object (default export)
-
-**Key functions / sections:**
-- `loadEnvFile()` — minimal `.env` parser (no dependency); real env vars take precedence over file values
-- `config.validate()` — returns an array of human-readable error strings for invalid settings (bad keys, out-of-range values, malformed addresses)
-- `config.getSellMode(target)` / `config.shouldCopySells(target)` — resolve per-target overrides vs global defaults
-- Target normalization block — lowercases addresses, fills defaults for `copyRatio`, `maxUsdc`, `sellMode`, `copySells`
-
-**Connections:** Imported by every other module. No outbound dependencies on project code.
+```
+pl1/
+├── src/
+│   ├── index.js              ← ENTRY POINT — bootstraps the bot
+│   ├── config.js             — Central configuration + .env loader + validation
+│   ├── trader.js             — Order execution engine (filters, sizing, FAK/GTC)
+│   ├── monitor.js            — On-chain OrderFilled event listener (WSS/HTTP)
+│   ├── api.js                — Polymarket API client (rate limiting, cache, helpers)
+│   ├── positions.js          — Position book: cost basis, P&L, chain sync
+│   ├── exit-manager.js       — Auto-exit: SL/TP/trailing/ratchet/time/EV
+│   ├── whale-tracker.js      — Per-whale performance tracking + Kelly sizing
+│   ├── stats.js              — Runtime statistics (events, fills, skips, per-target)
+│   ├── logger.js             — Structured logging, trade journal, webhook notifications
+│   ├── store.js              — Shared debounced JSON file persistence utility
+│   ├── errors.js             — Structured error types (HttpError, TransientError)
+│   ├── test.js               — Online connectivity + integration tests (npm test)
+│   ├── unit-test.js          — Offline unit tests (npm run test:unit)
+│   ├── simulate.js           — Offline simulation + validation suite (npm run simulate)
+│   ├── audit-test.js         — Audit tests: auth, markets, copy logic, benchmarks
+│   ├── show-positions.js     — CLI: display open positions (npm run positions)
+│   └── show-portfolio.js     — CLI: display portfolio with live P&L (npm run portfolio)
+├── data/                     — Runtime data (git-ignored, auto-created)
+│   ├── positions.json        — Persisted open position state
+│   ├── stats.json            — Trade statistics across restarts
+│   ├── health.json           — Health check output (written every 60s)
+│   ├── trades.jsonl          — Append-only trade journal (JSON Lines, rotated at 10 MB)
+│   └── whale-tracker.json    — Per-whale performance and win-rate data
+├── .env.example              — Template for environment variables (committed)
+├── .env                      — Your secrets (git-ignored, create from .env.example)
+├── .gitignore                — Ignores node_modules/, data/, .env, *.log, *.pem, *.key
+├── .nvmrc                    — Node version hint: 18
+├── Dockerfile                — Alpine Node 20 image, runs src/index.js, data/ volume
+├── docker-compose.yml        — Single-service Compose: build + .env + data/ volume
+├── eslint.config.js          — ESLint 9 flat config (ES2022, module globals)
+├── package.json              — Metadata, scripts, dependencies (v7.0.0)
+├── package-lock.json         — Locked dependency tree
+├── guide.md                  — Complete setup and usage guide
+└── PROJECT_MAP.md            — This file
+```
 
 ---
 
-### `src/index.js`
+## 2. File & Folder Descriptions
 
-**Purpose:** Entry point. Validates config, prints the startup banner, loads persisted state, initializes the trader client, wires the on-chain monitor to the trade callback, starts the exit manager, and manages graceful shutdown.
+### Root Files
 
-**Exports:** None (top-level script).
+| File | Role |
+|------|------|
+| `package.json` | Defines project name (`polymarket-copy-trader`), version (`7.0.0`), type (`module`), 7 npm scripts, 4 runtime dependencies, 1 dev dependency, and engines (`node >= 18`). |
+| `package-lock.json` | Locked dependency tree for reproducible `npm install`. |
+| `.env.example` | Documents every environment variable with comments. Committed to repo as a template. |
+| `.gitignore` | Excludes `node_modules/`, `data/`, `.env`, `.env.*` (except `.env.example`), `*.log`, `*.pem`, `*.key`. |
+| `.nvmrc` | Contains `18` — hints `nvm` to use Node.js 18. |
+| `Dockerfile` | Multi-stage build: `node:20-alpine` base, production-only `npm install`, copies `src/`, creates `data/` dir, volume mount, runs `node src/index.js`. |
+| `docker-compose.yml` | Compose v3.8. Single service `trader`, container name `poly-trader`, `restart: unless-stopped`, loads `.env`, mounts `./data:/app/data`. |
+| `eslint.config.js` | ESLint 9+ flat config. Targets `src/**/*.js`, ES2022 + module source type, defines Node.js/browser globals, rules for unused vars, const preference, eqeqeq, no-var. Ignores `node_modules/` and `data/`. |
+| `guide.md` | Comprehensive user guide covering overview, tech stack, structure, setup, env vars, scripts, architecture, features, common tasks, and troubleshooting. |
+| `PROJECT_MAP.md` | This file — detailed project map with file tree, descriptions, entry points, data flow, dependency map, external services, and config map. |
 
-**Key functions:**
-- `main()` — orchestrates startup: validate → load state → init trader → sync positions → start monitor → start exit manager → periodic health/watchdog timers
-- `writeHealth()` — writes `data/health.json` every 60 s with uptime, event count, position count
-- `wrappedCallback(target, activity)` — glue between monitor and trader; records stats, delegates to `placeCopyTrade` or `dryRunCopyTrade`
-- Signal handlers: `SIGUSR1` toggles dry-run, `SIGUSR2` prints stats/positions/portfolio, `SIGINT`/`SIGTERM` trigger graceful shutdown (flush state, save files)
-- `shutdown(signal)` — stops all timers, flushes positions/stats/whale-tracker/journal, sends webhook notification
+### Source Files (`src/`)
 
-**Connections:**
-- Imports: `config`, `trader` (initTrader, placeCopyTrade, dryRunCopyTrade, getWalletAddress, getClient), `monitor` (OnChainMonitor), `exit-manager` (startExitManager, stopExitManager), `whale-tracker`, `stats`, `positions`, `logger`
+| File | Role |
+|------|------|
+| `index.js` | **Entry point.** Validates config, prints startup banner with all settings, loads persisted state (positions, stats, whale tracker), initializes the CLOB trader client, syncs positions from chain, wires the on-chain monitor to the trade callback, starts the exit manager, sets up periodic health/watchdog timers, and handles graceful shutdown on SIGINT/SIGTERM. SIGUSR1 toggles dry-run; SIGUSR2 prints stats/positions/portfolio. |
+| `config.js` | **Central configuration.** Built-in `.env` file parser (no `dotenv` dependency). Defines all tunable parameters: wallet keys, trading params, smart filters, order execution, signal detection, auto-exit, risk controls, drawdown breaker, sell config, whale tracking, edge scoring, market quality, anti-snipe, position tracking, logging, market filters, whale targets, and API endpoints. Normalizes targets (lowercase addresses, default values). Exports `validate()` which returns an array of human-readable error strings. Exports `getSellMode(target)` and `shouldCopySells(target)` for per-target override resolution. |
+| `trader.js` | **Order execution engine.** The largest and most complex module. Implements the full smart filter pipeline (21 checks), position sizing with Kelly criterion and signal boost, FAK and GTC order modes with retry, smart routing (YES↔NO token comparison), anti-front-running delay, in-flight balance tracking, idempotency guards, daily spend/drawdown tracking, and losing-streak cooldown. Exports `initTrader()`, `placeCopyTrade()`, `dryRunCopyTrade()`, `getClient()`, `getWalletAddress()`, `recordExitPnl()`, `_alignToTick()`, `_priceValid()`. |
+| `monitor.js` | **On-chain event listener.** `OnChainMonitor` class subscribes to `OrderFilled` events on both Polymarket exchange contracts via WebSocket (or HTTP polling fallback). Dual topic subscriptions catch maker and taker fills. Implements connection-ID guard for reconnect races, 30s keepalive pings, exponential backoff with jitter, partial-fill batching, and deduplication (capped at 10k entries, purged every 10 min). |
+| `api.js` | **Polymarket API client.** Rate-limited (8 req/s ring buffer), retrying (exponential backoff, skip 4xx except 429), TTL-cached (5 min, 500 entry cap, 10 min cleanup), deduplicated access to Gamma (market metadata), CLOB (midpoint, order book), and Data API (activity, positions, balance). Also contains pure helper functions: `getSpread`, `getBookDepth`, `getExecutionPriceFromBook`, `isMarketActive`, `getComplementaryToken`, `extractMarketParams`, `getHoursUntilExpiry`, `getMarketQuality`, `calcEdgeScore`, `passesMarketFilter`. |
+| `positions.js` | **Position state manager.** `PositionManager` singleton. In-memory `Map<tokenId, position>` with cost-basis accounting, average entry price, realized P&L per partial/full sells, and accumulated closed P&L. Debounced persistence (2 s) via `JsonStore`. On-chain sync with mutex guard and stale-position cleanup (only when chain API returns valid data). Portfolio snapshot with live midpoint prices. Console print methods for positions and portfolio. |
+| `exit-manager.js` | **Auto-exit engine.** Interval-based position scanner (default 30 s). Evaluates each position against: EV exit (price > 0.95 or < 0.05), profit ratchet (activate at +15%, floor at +2%), stop-loss (-20%), take-profit (+40%), trailing stop (12% pullback from high, while still > 5% profit), and time exit (72 h stale). Maintains per-position state maps for trailing high watermark, ratchet activation, and last-move timestamp. Places FAK sell orders in live mode; simulates in dry-run. Records P&L for whale tracking. |
+| `whale-tracker.js` | **Whale performance tracker.** `WhaleTracker` singleton. Per-whale trade history over rolling 30-day window. Computes: win/loss counts, Bayesian-smoothed win rate (+2 pseudo-observations), profit factor, current streak, half-Kelly fraction (capped at 50%), and dynamic copy multiplier (0.1x–3.0x based on win rate + profit factor + streak, requires 5 min trades). Debounced persistence (5 s) via `JsonStore`. Console print sorted by P&L. |
+| `stats.js` | **Runtime statistics.** `Stats` singleton. Tracks: total events, buy/sell event counts, trade outcomes (filled/skipped/rejected/errors), per-target breakdowns with buy/sell sub-stats, and skip reasons. Persisted to `data/stats.json` on shutdown. Periodic console print (default every 5 min). `uptime()` returns formatted string. |
+| `logger.js` | **Structured logging.** Four levels (`debug`, `info`, `warn`, `error`) gated by `config.logLevel`. `journal(entry)` buffers JSON Lines for the trade journal. `flushJournal()` writes buffer to disk. 60 s rotation timer renames file when > `logMaxBytes`. `notify(event, data)` queues webhook POSTs (100-item cap, serialized, 5 s timeout, silent drop on failure). `trade(tag, entry)` is a convenience wrapper that logs + journals in one call. All timers use `.unref()`. |
+| `store.js` | **JSON file persistence utility.** `JsonStore` class used by `positions.js`, `stats.js`, and `whale-tracker.js`. Provides `load()` (returns parsed JSON or null on ENOENT), `scheduleSave(serializeFn)` (debounced with `.unref()` timer), and `flush()` (immediate write). Creates parent directories automatically. |
+| `errors.js` | **Structured error types.** `HttpError` (with `status`, `retryable`, `clientError` getters) and `TransientError`. Used by `api.js` retry logic and `trader.js` order retry to classify errors for retry decisions. |
+| `test.js` | **Online test suite.** Run via `npm test`. Tests config validation, Polygon RPC connection (chainId 137), position manager buy/sell/P&L, Data API (activity, positions, balance), Gamma API (market metadata, active check, filter check), and CLOB API (midpoint, order book, BUY/SELL execution estimates with slippage). Skips API tests gracefully when `TEST_ADDRESS` is not set. |
+| `unit-test.js` | **Offline unit tests.** Run via `npm run test:unit`. Uses `node:assert/strict`. Tests: config validation (12 cases), position manager (10 cases), stats tracker (7 cases), spread/depth/execution helpers (11 cases), market status/filters (10 cases), complementary token (5 cases), market params extraction (3 cases), market quality scoring (5 cases), edge score calculation (3 cases), expiry helper (4 cases), cache cleanup, and whale tracker (8 cases). |
+| `simulate.js` | **Offline simulation suite.** Run via `npm run simulate`. 13 test sections with 100+ assertions: position manager, config validation, API helpers (offline), tick alignment & price bounds, stats tracker, sell mode calculations, simulated trading scenario with smart filters, exit manager thresholds, risk guards, whale performance tracker, market quality scoring, edge score calculation, enhanced exit manager (ratchet, EV, time), and new config parameters. |
+| `audit-test.js` | **Audit test suite.** Run via `node src/audit-test.js`. Tests auth & connectivity (config validation, DRY_RUN support, perf timing, watchdog config, trader init + balance fetch), market fetch (activity, metadata, midpoint, order book, execution estimate), copy logic (position tracking, mock whale → dry-run decision, sell modes, risk guards), dry-run order placement, and speed benchmarks (midpoint latency, parallel fetch, offline logic 1000 iterations). |
+| `show-positions.js` | **CLI utility.** Loads `data/positions.json` and prints a formatted table of open positions. Exits immediately. |
+| `show-portfolio.js` | **CLI utility.** Loads positions and fetches live midpoint prices for each, then prints portfolio summary with unrealized P&L. Exits after printing. |
 
----
+### Runtime Data (`data/`)
 
-### `src/api.js`
-
-**Purpose:** Polymarket REST API client layer. Provides rate-limited, retrying, cached access to the Gamma metadata API, CLOB trading API, and Data API. Also contains pure-function helpers for spread/depth/edge calculations and market filtering.
-
-**Exports:**
-- `cleanExpiredCache()` — purge stale TTL cache entries
-- `getMarketByCondition(conditionId)` / `getMarketByToken(tokenId)` — fetch market metadata from Gamma (cached 5 min, deduplicated)
-- `isMarketActive(market)` — checks closed/resolved/active flags
-- `getComplementaryToken(market, tokenId)` — returns the YES↔NO counterpart token ID
-- `getMidpoint(tokenId)` — live midpoint price (never cached)
-- `getOrderBook(tokenId)` — full order book snapshot
-- `getSpread(book)` — computes bid-ask spread, spread %, best bid/ask, mid
-- `getBookDepth(book)` — total USDC on each side of the book
-- `getExecutionPriceFromBook(book, side, amount)` — walks book levels to estimate avg fill price and fill %
-- `fetchActivity(address)` / `fetchPositions(address)` / `fetchBalance(address)` — Data API wrappers
-- `extractMarketParams(market)` — pulls `tickSize` and `negRisk` from market object
-- `getHoursUntilExpiry(market)` — hours until market end date
-- `getMarketQuality(market)` — 0–1 quality score based on volume and liquidity
-- `calcEdgeScore({...})` — 0–1 composite score combining whale quality, signal boost, spread, depth, price, and market quality
-- `passesMarketFilter(market)` — checks market question against blocklist/allowlist keywords
-
-**Internal helpers:**
-- `_rateLimit()` — sliding-window limiter (max 8 req/s)
-- `fetchT(url, opts)` — fetch with AbortController timeout (8 s)
-- `withRetry(fn, label, retries)` — exponential-backoff retry; skips 4xx (except 429)
-- `cacheGet` / `cacheSet` / `dedup` — TTL cache + in-flight request coalescing
-
-**Connections:** Imports `config`. Used by `trader`, `exit-manager`, `positions`, `test`, `audit-test`.
-
----
-
-### `src/monitor.js`
-
-**Purpose:** Real-time on-chain event listener. Connects to Polygon via WebSocket (or HTTP fallback), subscribes to `OrderFilled` events on both Polymarket exchange contracts, decodes fills, batches partial fills per transaction, and fires the copy-trade callback.
-
-**Exports:**
-- `OnChainMonitor` class
-
-**Key methods:**
-- `start()` — begins listening; sets up heartbeat and dedup-cleanup timers
-- `stop()` — tears down provider, clears all timers, flushes pending batches
-- `_connect()` — creates an `ethers.WebSocketProvider` (or JSON-RPC fallback), subscribes to `OrderFilled` events with dual topic filters (maker + taker), starts 30 s keepalive pings, handles reconnect on close/error with connection-ID guard to prevent stale-close races
-- `_onLog(evt)` — decodes `OrderFilled` event, determines if the target wallet was maker or taker, computes side/tokenId/amounts, deduplicates, and adds to a batch accumulator
-- `_flushBatch(key, batch)` — sums partial fills, logs the aggregated trade, and calls `this.onTrade(target, activity)`
-- `_scheduleReconnect()` — exponential backoff (2 s → 30 s cap)
-- `_cleanSeen()` — purges the dedup map every 10 min
-
-**Connections:** Imports `ethers`, `config`, `logger`. Instantiated in `index.js` with a `targetMap` and the trade callback.
+| File | Written By | Update Frequency | Description |
+|------|-----------|-----------------|-------------|
+| `positions.json` | `positions.js` via `store.js` | Debounced 2 s after changes | All open positions with tokenId, shares, costBasis, avgEntry, realizedPnl, market name, copiedFrom label, timestamps. Also stores accumulated `closedPnl`. |
+| `stats.json` | `stats.js` via `store.js` | On shutdown | Event counts, trade outcomes, per-target stats, skip reasons. Loaded on startup to preserve stats across restarts. |
+| `health.json` | `index.js` | Every 60 s | JSON with `alive`, `uptime`, `events`, `filled`, `positions`, `dryRun`, `ts`. For external health monitoring. |
+| `trades.jsonl` | `logger.js` | On every trade event | Append-only JSON Lines file. Each line is a trade event (fill, skip, error, dry-run) with timestamp. Rotated when > 10 MB. |
+| `whale-tracker.json` | `whale-tracker.js` via `store.js` | Debounced 5 s after changes | Per-whale records: address, label, trade history (last 200), computed stats (win rate, profit factor, Kelly, multiplier, streak). |
 
 ---
 
-### `src/trader.js`
+## 3. Entry Points
 
-**Purpose:** Core order execution engine. Applies all smart filters (price, spread, depth, edge score, market quality, expiry, portfolio exposure, drawdown breaker, losing-streak cooldown), calculates position size (Kelly criterion + whale performance + signal boost), executes orders via the Polymarket CLOB client (FAK or GTC with timeout/fallback), tracks in-flight balance, and records trades in positions/stats/whale-tracker.
-
-**Exports:**
-- `initTrader()` — creates `ClobClient` with wallet signer + API key derivation
-- `getClient()` — returns the initialized CLOB client
-- `getWalletAddress()` — returns the bot's lowercase wallet address
-- `recordExitPnl(pnl)` — records realized P&L for the daily drawdown breaker (called by exit-manager)
-- `placeCopyTrade(target, activity)` — live order entry point with kill switch, idempotency, cooldown, lock, and all filters
-- `dryRunCopyTrade(target, activity)` — simulates the same logic without placing real orders; still tracks positions and daily spend for accurate dry-run stats
-
-**Key internal functions:**
-- `_execute(target, activity)` — the full filter + execute pipeline: fetches market/mid/book in parallel, runs every filter, calculates amount, optionally smart-routes via complementary token, applies drift guard and daily limit, places FAK or GTC order with retry (up to 2 retries for transient errors), records position and P&L
-- `_executeGtcOrder(...)` — places a GTC limit order offset from mid, polls for fill, falls back to FAK if unfilled after timeout
-- `_calcAmount(target, activity, mid)` — computes order size from `copyRatio × whaleUsdc × signalBoost × whaleMultiplier`, capped by `maxUsdc`, `maxTradeUsdc`, `maxPositionUsdc`, and Kelly fraction; for sells, resolves `all`/`proportional`/`ratio` modes
-- `_getSignalBoost(tokenId, side)` / `_recordSignal(...)` — multi-whale convergence detection within `signalWindowMs`
-- `_getBalance()` — cached balance fetch with in-flight USDC adjustment
-- `_alignToTick(price, tickSize, roundUp)` — rounds price to valid Polymarket tick, clamps to `[tick, 1-tick]`
-- `_wouldExceedDaily(amount)` / `_recordSpend(amount)` / `_recordDailyPnl(pnl)` — daily spend and drawdown tracking with auto-reset at midnight
-
-**Connections:** Imports `ClobClient`/`Side`/`OrderType` from `@polymarket/clob-client`, `Wallet` from `@ethersproject/wallet`, `config`, `positions`, `whale-tracker`, `logger`, and many functions from `api`. Called by `index.js`. `recordExitPnl` is called by `exit-manager`.
+| Entry Point | How to Run | Purpose |
+|------------|-----------|---------|
+| `src/index.js` | `npm start` or `node src/index.js` | **Main entry.** Starts the bot — validates config, loads state, initializes trader, starts monitor + exit manager, runs until signal. |
+| `src/test.js` | `npm test` | Online connectivity tests. |
+| `src/unit-test.js` | `npm run test:unit` | Offline unit tests. |
+| `src/simulate.js` | `npm run simulate` | Offline simulation suite. |
+| `src/audit-test.js` | `node src/audit-test.js` | Audit test suite. |
+| `src/show-positions.js` | `npm run positions` | CLI: print positions. |
+| `src/show-portfolio.js` | `npm run portfolio` | CLI: print portfolio. |
 
 ---
 
-### `src/positions.js`
+## 4. Data Flow Map
 
-**Purpose:** In-memory position book with cost-basis tracking, realized P&L accounting, debounced disk persistence, on-chain sync, and portfolio snapshot with live prices.
+### Main Trading Loop
 
-**Exports:**
-- `positions` — singleton `PositionManager` instance
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│  Polygon Blockchain                                                       │
+│  OrderFilled events on CTF Exchange (0x4bFb...) & NegRisk (0xC5d5...)   │
+└──────────────────────────┬───────────────────────────────────────────────┘
+                           │ WebSocket subscription (ethers.js)
+                           ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│  monitor.js — OnChainMonitor                                             │
+│  1. Decode OrderFilled log (maker/taker, tokenId, amounts, side)         │
+│  2. Deduplicate (txHash:addr:orderHash)                                  │
+│  3. Batch partial fills (txBatchWindowMs = 400ms)                        │
+│  4. Fire onTrade(target, activity)                                       │
+└──────────────────────────┬───────────────────────────────────────────────┘
+                           │
+                           ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│  index.js — wrappedCallback                                              │
+│  1. stats.recordEvent(target, side)                                      │
+│  2. Delegate to placeCopyTrade() or dryRunCopyTrade()                    │
+│  3. stats.recordTrade(target, result, usdcAmount, side)                  │
+└──────────────────────────┬───────────────────────────────────────────────┘
+                           │
+                           ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│  trader.js — _execute() or dryRunCopyTrade()                             │
+│  1. Preflight checks (kill switch, dedup, cooldown, max positions, ...)  │
+│  2. Parallel fetch: market metadata + midpoint + order book              │
+│  3. Smart filter pipeline (21 checks)                                    │
+│  4. _calcAmount() — position sizing (Kelly + signal boost + whale mult)  │
+│  5. Smart routing: compare direct vs complementary token                 │
+│  6. Anti-snipe delay (0–1500ms)                                          │
+│  7. Place order via ClobClient (FAK or GTC with fallback)                │
+│  8. On fill: positions.recordBuy/Sell, stats, whale-tracker              │
+└──────────────────────────────────────────────────────────────────────────┘
+```
 
-**Key methods:**
-- `load()` / `flush()` — read/write `data/positions.json`
-- `_scheduleSave()` / `_doSave()` — debounced save (2 s delay, `unref`'d so CLI scripts can exit)
-- `syncFromChain(walletAddress)` — fetches on-chain positions via `fetchPositions`, reconciles with local state (adds missing, updates share counts, removes stale), protected by a mutex
-- `recordBuy(tokenId, shares, usdcSpent, opts)` — creates or updates a position with cost basis and avg entry price
-- `recordSell(tokenId, sharesSold, usdcReceived)` — computes realized P&L, reduces shares/cost basis, removes position on full exit and accumulates `_closedPnl`
-- `getPosition` / `getShares` / `hasPosition` / `getAll` / `getCount` / `getTotalCostBasis` / `getTotalRealizedPnl` — query helpers
-- `getSnapshot()` — fetches live midpoints for all positions, computes unrealized P&L per position and totals
-- `print()` — console table of open positions
-- `printPortfolio()` — console table with live prices and unrealized P&L
+### Auto-Exit Loop (Parallel)
 
-**Connections:** Imports `config`, `api` (fetchPositions, getMidpoint), `logger`. Used by `trader`, `exit-manager`, `index`, `stats`, `test`, `simulate`, `show-positions`, `show-portfolio`.
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│  exit-manager.js — runs every 30s                                        │
+│  For each open position:                                                 │
+│    1. Fetch live midpoint price via api.getMidpoint()                     │
+│    2. Compute current value and P&L %                                    │
+│    3. Check exit rules in priority order:                                │
+│       EV → ratchet → stop-loss → take-profit → trailing → time          │
+│    4. If triggered: place SELL order (live) or simulate (dry-run)         │
+│    5. Record P&L in positions, whale-tracker, and daily drawdown         │
+└──────────────────────────────────────────────────────────────────────────┘
+```
 
----
+### Persistence Flow
 
-### `src/exit-manager.js`
-
-**Purpose:** Periodic position scanner that auto-exits positions based on configurable rules: stop-loss, take-profit, trailing stop, profit ratchet, time-based exit, and EV-based exit. Operates in both live and dry-run modes.
-
-**Exports:**
-- `startExitManager(client)` — starts the interval timer (`exitCheckIntervalMs`)
-- `stopExitManager()` — clears the timer
-
-**Key internal functions:**
-- `_checkPositions()` — iterates all open positions, calls `_evaluatePosition` for each (mutex to prevent overlap)
-- `_evaluatePosition(pos)` — fetches live midpoint, computes P&L %, then checks exit rules in priority order: EV exit (price > 0.95 or < 0.05) → profit ratchet → stop-loss → take-profit → trailing stop → time exit
-- `_exitPosition(pos, mid, reason)` — in dry-run: simulates the sell and records P&L; in live: fetches market params, creates a FAK sell order via the CLOB client, records P&L, logs, and sends webhook
-- `_cleanup(tokenId)` — removes trailing-stop, ratchet, and time-tracking state for a closed position
-
-**State maps:**
-- `_trailingState` — `Map<tokenId, { highWaterMark, highMid }>` for trailing stops
-- `_ratchetState` — `Map<tokenId, { activated, floorValue }>` for profit ratchets
-- `_timeState` — `Map<tokenId, { lastMid, lastMoveAt }>` for stale-position detection
-
-**Connections:** Imports `@polymarket/clob-client` (Side, OrderType), `config`, `positions`, `whale-tracker`, `trader` (recordExitPnl), `logger`, `api` (getMidpoint, getOrderBook, getExecutionPriceFromBook, extractMarketParams, getMarketByToken, isMarketActive). Started by `index.js`.
-
----
-
-### `src/stats.js`
-
-**Purpose:** Runtime statistics collector. Tracks event counts, trade outcomes (filled/skipped/rejected/errors), per-target breakdowns, and skip reasons. Persists to disk across restarts.
-
-**Exports:**
-- `stats` — singleton `Stats` instance
-
-**Key methods:**
-- `recordEvent(label, side)` — increments event counters (total + buy/sell + per-target)
-- `recordTrade(label, result, usdcAmount, side)` — classifies trade result (filled, skipped, rejected, error) and updates counters + per-target stats with buy/sell breakdowns
-- `load()` / `save()` — read/write `data/stats.json`
-- `startReporting(intervalMs)` / `stop()` — periodic console stats dump (default every 5 min)
-- `uptime()` — formatted uptime string (`Xh Ym`)
-- `getSummary()` — serializable snapshot of all stats
-- `print()` — formatted console output with per-target breakdown and skip reasons
-
-**Connections:** Imports `config`, `logger`. Used by `index.js` (event/trade recording, lifecycle), `audit-test`.
-
----
-
-### `src/logger.js`
-
-**Purpose:** Structured logging with four levels, a JSON Lines trade journal with file rotation, and fire-and-forget webhook notifications (Slack/Discord).
-
-**Exports:**
-- `debug(tag, msg, ...args)` / `info(...)` / `warn(...)` / `error(...)` — console logging gated by `config.logLevel`
-- `journal(entry)` — appends a JSON object to the trade journal buffer
-- `flushJournal()` — flushes the buffered journal lines to disk
-- `notify(event, data)` — queues a webhook POST (capped at 100 items, serialized sending, 5 s timeout)
-- `trade(tag, entry)` — convenience wrapper that logs to console + journal in one call, formatting differently for filled/skip/rejected/error/dry_run actions
-
-**Internal details:**
-- `_flush()` — serialized file writer (prevents concurrent appends)
-- 60 s rotation timer checks `logMaxBytes` and renames the file; timer is `unref`'d for CLI scripts
-- `_drainWebhook()` — serialized webhook sender, silently drops on failure
-
-**Connections:** Imports `config`. Used by every other module.
+```
+  positions.recordBuy/Sell()  ──► JsonStore.scheduleSave() ──► 2s debounce ──► data/positions.json
+  whaleTracker.recordTrade()  ──► JsonStore.scheduleSave() ──► 5s debounce ──► data/whale-tracker.json
+  stats.save()                ──► JsonStore.scheduleSave() ──► immediate    ──► data/stats.json
+  logger.journal()            ──► _buf buffer ──► _flush() ──► data/trades.jsonl
+  writeHealth()               ──► writeFile() ──► every 60s ──► data/health.json
+```
 
 ---
 
-### `src/whale-tracker.js`
+## 5. Dependency Map (Key Module Relationships)
 
-**Purpose:** Tracks per-whale trading performance over a rolling window (default 30 days). Computes win rate (Bayesian-smoothed), profit factor, current streak, half-Kelly fraction, and a dynamic copy multiplier. Persists to disk.
+### Inbound Dependencies (What Imports This Module)
 
-**Exports:**
-- `whaleTracker` — singleton `WhaleTracker` instance
+| Module | Imported By |
+|--------|------------|
+| `config.js` | Every other module (universal dependency) |
+| `logger.js` | `index.js`, `trader.js`, `monitor.js`, `api.js` (indirectly), `positions.js`, `exit-manager.js`, `whale-tracker.js`, `stats.js` |
+| `store.js` | `positions.js`, `stats.js`, `whale-tracker.js` |
+| `errors.js` | `api.js`, `trader.js` |
+| `api.js` | `trader.js`, `exit-manager.js`, `positions.js`, `test.js`, `simulate.js`, `audit-test.js`, `unit-test.js` |
+| `positions.js` | `index.js`, `trader.js`, `exit-manager.js`, `simulate.js`, `test.js`, `audit-test.js`, `unit-test.js`, `show-positions.js`, `show-portfolio.js` |
+| `trader.js` | `index.js`, `exit-manager.js` (only `recordExitPnl`), `simulate.js` (only `_alignToTick`, `_priceValid`), `audit-test.js` |
+| `whale-tracker.js` | `index.js`, `trader.js`, `exit-manager.js`, `simulate.js`, `unit-test.js` |
+| `stats.js` | `index.js`, `simulate.js`, `audit-test.js`, `unit-test.js` |
+| `monitor.js` | `index.js` |
+| `exit-manager.js` | `index.js` |
 
-**Key methods:**
-- `recordTrade(address, { tokenId, side, entryPrice, exitPrice, pnlPct, usdcPnl, market })` — appends trade, trims window, recalculates all derived stats
-- `_recalculate(record)` — computes: win/loss counts, win rate (with +2 Bayesian pseudo-observations), profit factor, streak, half-Kelly fraction (`f* = (p·b − q) / b`, capped at 50%), and dynamic `copyMultiplier` based on win rate + profit factor + streak (clamped to `[whaleMinMultiplier, whaleMaxMultiplier]`)
-- `getMultiplier(address)` / `getKellyFraction(address)` / `getStats(address)` / `getAllStats()` — read accessors
-- `load()` / `flush()` / `_scheduleSave()` — persistence with 5 s debounced save
-- `print()` — console table sorted by total P&L
+### Outbound Dependencies (What This Module Imports)
 
-**Connections:** Imports `config`, `logger`. Used by `trader` (copy ratio adjustment), `exit-manager` (recording exit P&L per whale), `index` (load/flush/print).
-
----
-
-### `src/test.js`
-
-**Purpose:** Online connectivity and integration test script. Verifies config validity, Polygon RPC connection, position manager buy/sell/P&L math, Data API (activity, positions, balance), Gamma API (market metadata, active check, filter check), and CLOB API (midpoint, order book, execution estimates with slippage).
-
-**Exports:** None (top-level script, run via `npm test`).
-
-**Connections:** Imports `ethers`, `config`, `api` (fetchActivity, getMarketByToken, extractMarketParams, getMidpoint, getOrderBook, getExecutionPriceFromBook, fetchPositions, fetchBalance, isMarketActive, passesMarketFilter), `positions`.
-
----
-
-### `src/simulate.js`
-
-**Purpose:** Comprehensive offline test suite (149 tests). Validates all bot logic without network access: position math, config validation, tick alignment, spread/depth calculations, execution price estimation, smart filters, sell modes, signal boost, stats tracking, exit manager thresholds, market filters, and order book walking.
-
-**Exports:** None (top-level script, run via `npm run simulate`).
-
-**Connections:** Imports `positions`, `api` (getSpread, getBookDepth, getExecutionPriceFromBook, passesMarketFilter, getMarketQuality, calcEdgeScore, getHoursUntilExpiry, isMarketActive, getComplementaryToken), `stats`, `config`.
-
----
-
-### `src/audit-test.js`
-
-**Purpose:** Audit-focused test suite that covers auth/trader initialization, market fetching, copy logic, dry-run order placement, and speed benchmarks. Runs with or without API keys (API-dependent tests are skipped gracefully).
-
-**Exports:** None (top-level script, run via `node src/audit-test.js`).
-
-**Connections:** Imports `config`, `positions`, `stats`, `api` (getMidpoint, getOrderBook, getSpread, getBookDepth, getExecutionPriceFromBook, getMarketByToken, extractMarketParams, fetchBalance, fetchPositions, fetchActivity, isMarketActive, passesMarketFilter, getMarketQuality, calcEdgeScore), and conditionally `trader` (initTrader, getWalletAddress).
+| Module | Imports From |
+|--------|-------------|
+| `index.js` | `config`, `trader` (5 exports), `monitor` (OnChainMonitor), `exit-manager` (2 exports), `whale-tracker`, `stats`, `positions`, `logger`, `node:fs/promises`, `node:path` |
+| `config.js` | `node:fs` (readFileSync), `node:path` (resolve) |
+| `trader.js` | `@polymarket/clob-client` (ClobClient, Side, OrderType), `@ethersproject/wallet` (Wallet), `config`, `positions`, `whale-tracker`, `logger`, `errors`, `api` (17 functions) |
+| `monitor.js` | `ethers`, `config`, `logger` |
+| `api.js` | `config`, `errors` (HttpError) |
+| `positions.js` | `config`, `api` (fetchPositions, getMidpoint), `logger`, `store` (JsonStore) |
+| `exit-manager.js` | `@polymarket/clob-client` (Side, OrderType), `config`, `positions`, `whale-tracker`, `trader` (recordExitPnl), `logger`, `api` (6 functions) |
+| `whale-tracker.js` | `config`, `logger`, `store` (JsonStore) |
+| `stats.js` | `config`, `logger`, `store` (JsonStore) |
+| `logger.js` | `config`, `node:fs/promises` (appendFile, stat, rename, mkdir), `node:path` |
+| `store.js` | `node:fs/promises` (readFile, writeFile, mkdir), `node:path` |
+| `errors.js` | _(none — leaf module)_ |
 
 ---
 
-### `src/show-positions.js`
+## 6. External Services & Integrations
 
-**Purpose:** CLI utility that loads and prints current open positions from `data/positions.json`.
+| Service | Protocol | Used By | Purpose |
+|---------|----------|---------|---------|
+| **Polygon RPC (WSS)** | WebSocket | `monitor.js` | Real-time subscription to `OrderFilled` events on Polymarket exchange contracts. Provider: user-configured (Alchemy, QuickNode, etc.). |
+| **Polygon RPC (HTTP)** | HTTPS | `monitor.js` (fallback) | Fallback when WSS is unavailable. 10–15 s delay. Default: `https://polygon-rpc.com`. |
+| **Polymarket CLOB API** | HTTPS | `api.js`, `trader.js` | Midpoint prices (`/midpoint`), order books (`/book`), order placement (`createAndPostMarketOrder`, `createAndPostOrder`, `cancelOrder`, `getOrder`), API key derivation (`createOrDeriveApiKey`). |
+| **Gamma API** | HTTPS | `api.js` | Market metadata lookup by condition ID or token ID (`/markets`). Returns question, token IDs, tick size, neg risk, volume, liquidity, end date. |
+| **Polymarket Data API** | HTTPS | `api.js` | User activity (`/activity`), positions (`/positions`), USDC balance (`/balance`). |
+| **Webhook endpoint** | HTTPS POST | `logger.js` | Optional Slack/Discord/custom webhook for trade alerts. Fire-and-forget, 5 s timeout. |
 
-**Exports:** None (top-level script, run via `npm run positions`).
+### Polymarket Exchange Contracts (Polygon Mainnet)
 
-**Connections:** Imports `positions`.
+| Contract | Address | Description |
+|----------|---------|-------------|
+| CTF Exchange | `0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E` | Standard exchange for binary outcome tokens |
+| NegRisk CTF Exchange | `0xC5d563A36AE78145C45a50134d48A1215220f80a` | Exchange for neg-risk markets |
+
+### On-Chain Event Monitored
+
+`OrderFilled(bytes32 indexed orderHash, address indexed maker, address indexed taker, uint256 makerAssetId, uint256 takerAssetId, uint256 makerAmountFilled, uint256 takerAmountFilled, uint256 fee)` — both tokens use 6 decimal places.
 
 ---
 
-### `src/show-portfolio.js`
+## 7. Config & Env Map
 
-**Purpose:** CLI utility that loads positions and prints a portfolio summary with live midpoint prices and unrealized P&L.
+### Which Config File Controls What
 
-**Exports:** None (top-level script, run via `npm run portfolio`).
+| File | Controls |
+|------|----------|
+| `src/config.js` | All runtime behavior: whale targets, risk limits, smart filters, auto-exit thresholds, order execution params, whale tracking settings, signal detection, logging, API endpoints. This is the single source of truth for all tunable parameters. |
+| `.env` / `.env.example` | Secrets and overrides: `PRIVATE_KEY`, `WSS_URL`, `RPC_URL`, risk control overrides (`MAX_DAILY_USDC`, etc.), `LOG_LEVEL`, `WEBHOOK_URL`, `KILL_SWITCH`, `TEST_ADDRESS`, `FUNDER_ADDRESS`, `SIGNATURE_TYPE`. Values from `.env` are loaded by `config.js`'s built-in parser. Real env vars take precedence. |
+| `eslint.config.js` | ESLint linting rules and globals. No runtime effect. |
+| `.nvmrc` | Node.js version hint for `nvm`. Contains `18`. |
+| `Dockerfile` | Build steps: base image (`node:20-alpine`), production install, file copy, volume, CMD. |
+| `docker-compose.yml` | Service definition: build context, container name, restart policy, env file, volume mount. |
+| `package.json` | npm scripts, dependency versions, engine constraint (`node >= 18`). |
+| `.gitignore` | Files excluded from version control. |
 
-**Connections:** Imports `positions` (which internally calls `api.getMidpoint` for live pricing).
+### Environment Variable → Config Property Mapping
+
+| Env Variable | Config Property | Default | Type |
+|-------------|----------------|---------|------|
+| `PRIVATE_KEY` | `config.privateKey` | `''` | string |
+| `WSS_URL` | `config.wssUrl` | `''` | string |
+| `RPC_URL` | `config.rpcUrl` | `'https://polygon-rpc.com'` | string |
+| `LIVE_MODE` | (affects `config.dryRun`) | _(unset)_ | `'1'` to go live |
+| `DRY_RUN` | `config.dryRun` | `true` (when LIVE_MODE unset) | boolean |
+| `KILL_SWITCH` | `config.killSwitch` | `false` | boolean |
+| `FUNDER_ADDRESS` | `config.funderAddress` | `''` | string |
+| `SIGNATURE_TYPE` | `config.signatureType` | `0` | integer (0/1/2) |
+| `MAX_DAILY_USDC` | `config.maxDailyUsdc` | `100` | integer |
+| `MAX_POSITION_USDC` | `config.maxPositionUsdc` | `50` | integer |
+| `MAX_TRADE_USDC` | `config.maxTradeUsdc` | `25` | integer |
+| `MIN_BALANCE_USDC` | `config.minBalanceUsdc` | `20` | integer |
+| `MAX_DAILY_DRAWDOWN_USDC` | `config.maxDailyDrawdownUsdc` | `30` | integer |
+| `LOG_LEVEL` | `config.logLevel` | `'info'` | string |
+| `WEBHOOK_URL` | `config.webhookUrl` | `''` | string |
+| `TEST_ADDRESS` | `config.testAddress` | `''` | string |
+
+### Config Properties NOT Settable via Env
+
+These are only configurable by editing `src/config.js`:
+
+`slippage`, `maxPriceDrift`, `cooldownMs`, `minOrderUsdc`, `txBatchWindowMs`, `enablePerfTiming`, `maxBuyPrice`, `minSellPrice`, `maxSpreadPct`, `minBookDepthUsdc`, `orderMode`, `gtcOffsetPct`, `gtcTimeoutMs`, `useSmartRouting`, `signalWindowMs`, `signalBoostRatio`, `signalMaxBoost`, `enableAutoExit`, `stopLossPct`, `takeProfitPct`, `enableTrailingStop`, `trailingStopPct`, `enableProfitRatchet`, `ratchetThreshold`, `ratchetFloor`, `enableTimeExit`, `timeExitHours`, `timeExitMinMovePct`, `enableEvExit`, `evExitMaxPrice`, `evExitMinPrice`, `exitCheckIntervalMs`, `maxOpenPositions`, `maxPortfolioExposurePct`, `enableDrawdownBreaker`, `minExpiryHours`, `enableStreakCooldown`, `maxLosingStreak`, `streakCooldownMs`, `copySells`, `sellMode`, `sellOnlyIfHeld`, `enableWhaleTracking`, `whaleTrackFile`, `whaleTrackWindowMs`, `whaleMinTrades`, `whaleMinMultiplier`, `whaleMaxMultiplier`, `enableKellySizing`, `enableEdgeFilter`, `minEdgeScore`, `enableMarketQuality`, `minMarketVolume`, `enableAntiSnipe`, `antiSnipeMaxMs`, `syncPositionsOnStart`, `positionFile`, `statsFile`, `healthFile`, `logFile`, `logMaxBytes`, `marketBlocklist`, `marketAllowlist`, `targets`, `watchdogIntervalMs`, `watchdogMaxSilenceMs`.
+
+---
+
+## Unverifiable Items
+
+The following items are referenced in the codebase or docs but cannot be fully verified from the source code alone:
+
+1. **Polymarket wallet approval process** — the guide mentions connecting the wallet to polymarket.com and completing approval prompts. The exact steps depend on Polymarket's current UI.
+2. **Alchemy free tier limits** — the guide states "300M compute units/month." This may have changed.
+3. **Exact number of offline tests** — the guide and existing docs reference "149 tests" in `simulate.js`, but the actual count depends on assertions executed at runtime (some are conditional). The codebase contains approximately 100+ `assert()` calls.
+4. **Git repository URL** — referenced as `<repo-url>` in the guide. The actual URL depends on where the repo is hosted.
+5. **Polymarket API stability** — the bot assumes specific response shapes from Gamma, CLOB, and Data APIs. If Polymarket changes their API contracts, the bot may break without code changes.
