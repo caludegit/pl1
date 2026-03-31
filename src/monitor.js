@@ -352,20 +352,29 @@ export class OnChainMonitor {
 
     async _flushTxGroup(txGroup) {
         const batches = [...txGroup.batches.values()];
+        const isBatchedTx = batches.length > 1;
 
-        if (batches.length > 1) {
+        if (isBatchedTx) {
             const label = batches[0].target.label;
             const sides = batches.map(b => `${b.side} ...${b.tokenId.slice(-8)}`).join(', ');
             log.info(label, `Multi-token tx: ${batches.length} trades in 1 tx (${sides})`);
+
+            // Sort: SELLs first, then BUYs.
+            // Whale rebalances (sell A → buy B) must free capital before opening new positions,
+            // otherwise BUYs may hit max_positions / portfolio_exposure / daily_limit checks
+            // that would have passed after the sell freed up capital.
+            batches.sort((a, b) => (a.side === 'SELL' ? 0 : 1) - (b.side === 'SELL' ? 0 : 1));
         }
 
         for (const batch of batches) {
+            // Tag batched-tx fills so trader skips cooldown/lock for subsequent fills
+            batch.isBatchedTx = isBatchedTx;
             await this._flushBatch(batch);
         }
     }
 
     async _flushBatch(batch) {
-        const { target, tokenId, side, exchange, role, fills, txHash } = batch;
+        const { target, tokenId, side, exchange, role, fills, txHash, isBatchedTx } = batch;
 
         const totalUsdc   = fills.reduce((s, f) => s + f.usdcAmount,   0);
         const totalTokens = fills.reduce((s, f) => s + f.tokenAmount, 0);
@@ -389,6 +398,7 @@ export class OnChainMonitor {
                 exchange,
                 role,
                 fillCount:       fills.length,
+                isBatchedTx:     !!isBatchedTx,
             });
         } catch (e) {
             log.error(target.label, `Callback error: ${e.message}`);
