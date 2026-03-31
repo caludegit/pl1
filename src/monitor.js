@@ -220,6 +220,7 @@ export class OnChainMonitor {
                 maker, taker,
                 makerAssetId, takerAssetId,
                 makerAmountFilled, takerAmountFilled,
+                fee,
             } = parsed.args;
 
             const makerAddr = maker.toLowerCase();
@@ -337,7 +338,8 @@ export class OnChainMonitor {
                 });
             }
 
-            txGroup.batches.get(fillKey).fills.push({ usdcAmount, tokenAmount });
+            const feeUsdc = fmt(fee);
+            txGroup.batches.get(fillKey).fills.push({ usdcAmount, tokenAmount, feeUsdc });
 
         } catch (err) {
             log.error('MON', 'Log decode error:', err.message);
@@ -367,10 +369,11 @@ export class OnChainMonitor {
 
         const totalUsdc   = fills.reduce((s, f) => s + f.usdcAmount,   0);
         const totalTokens = fills.reduce((s, f) => s + f.tokenAmount, 0);
+        const totalFees   = fills.reduce((s, f) => s + f.feeUsdc,     0);
         const avgPrice    = totalTokens > 0 ? totalUsdc / totalTokens : 0;
 
         log.info(target.label, `${side} as ${role.toUpperCase()} on ${exchange} (${fills.length} fill${fills.length > 1 ? 's' : ''})`);
-        log.info(target.label, `  ...${tokenId.slice(-20)} | $${totalUsdc.toFixed(2)} USDC | ${totalTokens.toFixed(4)} shares @ avg $${avgPrice.toFixed(4)}`);
+        log.info(target.label, `  ...${tokenId.slice(-20)} | $${totalUsdc.toFixed(2)} USDC | ${totalTokens.toFixed(4)} shares @ avg $${avgPrice.toFixed(4)} | fee $${totalFees.toFixed(2)}`);
 
         try {
             await this.onTrade(target, {
@@ -380,6 +383,8 @@ export class OnChainMonitor {
                 size:            totalTokens,
                 price:           avgPrice,
                 usdcSize:        totalUsdc,
+                totalFees,
+                netUsdcSize:     side === 'BUY' ? totalUsdc + totalFees : totalUsdc - totalFees,
                 transactionHash: txHash,
                 exchange,
                 role,
