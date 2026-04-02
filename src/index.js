@@ -65,6 +65,7 @@ async function main() {
     if (config.killSwitch) {
         console.log('  ⚠  KILL SWITCH IS ON — no new trades will be placed');
     }
+    console.log(`  Profile:       ${config.marketProfile.toUpperCase()}`);
     console.log(`  Mode:          ${config.dryRun ? 'DRY-RUN (no real orders)' : 'LIVE'}`);
     console.log(`  Order mode:    ${config.orderMode.toUpperCase()}${config.orderMode === 'gtc' ? ` (${config.gtcOffsetPct * 100}% offset, ${config.gtcTimeoutMs / 1000}s timeout)` : ''}`);
     console.log(`  Slippage:      ${(config.slippage * 100).toFixed(1)}%`);
