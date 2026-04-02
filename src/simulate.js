@@ -466,7 +466,15 @@ for (const s of scenarios) {
 
 const netPnl = totalReturned - totalInvested;
 console.log(`\n  Simulation: invested $${totalInvested.toFixed(2)}, returned $${totalReturned.toFixed(2)}, net P&L: $${netPnl.toFixed(2)}`);
-assert(true, `Smart filters prevented buying sim_3 at $0.95 (would have lost ~$8.50)`);
+if (config.maxBuyPrice < 0.95) {
+    assert(true, `Smart filters prevented buying sim_3 at $0.95 (would have lost ~$8.50)`);
+} else {
+    // Profile allows buying at $0.95; clean up the position
+    if (positions.hasPosition('sim_3')) {
+        positions.recordSell('sim_3', 10, 9.5);
+    }
+    assert(true, `Profile "${config.marketProfile}" allows buying at $0.95 — position cleaned up`);
+}
 
 // Exit manager simulation
 console.log('');
@@ -538,50 +546,48 @@ console.log('  [Whale Performance Tracker]');
 
 import { whaleTracker } from './whale-tracker.js';
 
-// Record some winning trades
+// Record winning trades (enough to exceed whaleMinTrades for any profile)
 {
-    whaleTracker.recordTrade('0x1111111111111111111111111111111111111111', {
-        tokenId: 'wt_1', side: 'SELL', entryPrice: 0.50, exitPrice: 0.70,
-        pnlPct: 0.40, usdcPnl: 10, market: 'Win Trade 1',
-    });
-    whaleTracker.recordTrade('0x1111111111111111111111111111111111111111', {
-        tokenId: 'wt_2', side: 'SELL', entryPrice: 0.30, exitPrice: 0.50,
-        pnlPct: 0.67, usdcPnl: 15, market: 'Win Trade 2',
-    });
-    whaleTracker.recordTrade('0x1111111111111111111111111111111111111111', {
-        tokenId: 'wt_3', side: 'SELL', entryPrice: 0.40, exitPrice: 0.55,
-        pnlPct: 0.375, usdcPnl: 8, market: 'Win Trade 3',
-    });
-    // One loss
-    whaleTracker.recordTrade('0x1111111111111111111111111111111111111111', {
-        tokenId: 'wt_4', side: 'SELL', entryPrice: 0.60, exitPrice: 0.40,
-        pnlPct: -0.33, usdcPnl: -5, market: 'Loss Trade 1',
-    });
-    whaleTracker.recordTrade('0x1111111111111111111111111111111111111111', {
-        tokenId: 'wt_5', side: 'SELL', entryPrice: 0.50, exitPrice: 0.65,
-        pnlPct: 0.30, usdcPnl: 7, market: 'Win Trade 4',
-    });
+    const numTrades = Math.max(config.whaleMinTrades + 2, 7);
+    const numLosses = 1;
+    let expectedPnl = 0;
+    let wins = 0;
+    let losses = 0;
+    for (let i = 0; i < numTrades; i++) {
+        const isLoss = i === numTrades - 2; // one loss near the end
+        const entry = isLoss ? 0.60 : 0.40 + (i % 3) * 0.05;
+        const exit = isLoss ? 0.40 : entry + 0.15 + (i % 2) * 0.05;
+        const pnl = isLoss ? -5 : 7 + (i % 3);
+        expectedPnl += pnl;
+        if (isLoss) losses++; else wins++;
+        whaleTracker.recordTrade('0x1111111111111111111111111111111111111111', {
+            tokenId: `wt_${i}`, side: 'SELL', entryPrice: entry, exitPrice: exit,
+            pnlPct: (exit - entry) / entry, usdcPnl: pnl, market: `Win Trade ${i}`,
+        });
+    }
 
     const stats1 = whaleTracker.getStats('0x1111111111111111111111111111111111111111');
     assert(stats1 !== null, 'whale record created');
-    assert(stats1.totalTrades === 5, `totalTrades = ${stats1.totalTrades} (expected 5)`);
-    assert(stats1.wins === 4, `wins = ${stats1.wins} (expected 4)`);
-    assert(stats1.losses === 1, `losses = ${stats1.losses} (expected 1)`);
+    assert(stats1.totalTrades === numTrades, `totalTrades = ${stats1.totalTrades} (expected ${numTrades})`);
+    assert(stats1.wins === wins, `wins = ${stats1.wins} (expected ${wins})`);
+    assert(stats1.losses === losses, `losses = ${stats1.losses} (expected ${losses})`);
     assert(stats1.winRate > 0.6, `winRate = ${(stats1.winRate*100).toFixed(1)}% (expected > 60%)`);
     assert(stats1.profitFactor > 1.0, `profitFactor = ${stats1.profitFactor.toFixed(2)} (expected > 1.0)`);
     assert(stats1.kellyFraction > 0, `kellyFraction = ${stats1.kellyFraction.toFixed(3)} (expected > 0)`);
     assert(stats1.copyMultiplier >= 1.0, `copyMultiplier = ${stats1.copyMultiplier.toFixed(2)} (expected >= 1.0 for winning whale)`);
-    assert(stats1.totalPnlUsdc === 35, `totalPnlUsdc = $${stats1.totalPnlUsdc} (expected $35)`);
+    assert(stats1.totalPnlUsdc === expectedPnl, `totalPnlUsdc = $${stats1.totalPnlUsdc} (expected $${expectedPnl})`);
 }
 
-// Record a losing whale
+// Record a losing whale (enough trades to exceed whaleMinTrades for any profile)
 {
-    for (let i = 0; i < 6; i++) {
+    const numTrades = Math.max(config.whaleMinTrades + 2, 8);
+    const numWins = 2; // first 2 are wins, rest are losses
+    for (let i = 0; i < numTrades; i++) {
         whaleTracker.recordTrade('0x2222222222222222222222222222222222222222', {
             tokenId: `lt_${i}`, side: 'SELL',
-            entryPrice: 0.50, exitPrice: i < 2 ? 0.60 : 0.35,
-            pnlPct: i < 2 ? 0.20 : -0.30,
-            usdcPnl: i < 2 ? 5 : -8,
+            entryPrice: 0.50, exitPrice: i < numWins ? 0.60 : 0.35,
+            pnlPct: i < numWins ? 0.20 : -0.30,
+            usdcPnl: i < numWins ? 5 : -8,
             market: `Losing Trade ${i}`,
         });
     }
@@ -720,11 +726,11 @@ console.log('  [New Optimization Config]');
     assert(config.ratchetThreshold > 0, `ratchet threshold = +${(config.ratchetThreshold * 100).toFixed(0)}%`);
     assert(config.enableTimeExit === true, 'time exit enabled');
     assert(config.enableEvExit === true, 'EV exit enabled');
-    // Tighter defaults
-    assert(config.stopLossPct === -0.20, `tighter stop-loss: ${(config.stopLossPct * 100).toFixed(0)}%`);
-    assert(config.takeProfitPct === 0.40, `faster take-profit: +${(config.takeProfitPct * 100).toFixed(0)}%`);
-    assert(config.trailingStopPct === 0.12, `tighter trailing: ${(config.trailingStopPct * 100).toFixed(0)}%`);
-    assert(config.exitCheckIntervalMs === 30_000, `faster exit checks: ${config.exitCheckIntervalMs / 1000}s`);
+    // Exit parameters must be within sane bounds (profile-independent)
+    assert(config.stopLossPct < 0 && config.stopLossPct >= -0.50, `stop-loss in range: ${(config.stopLossPct * 100).toFixed(0)}%`);
+    assert(config.takeProfitPct > 0 && config.takeProfitPct <= 1.0, `take-profit in range: +${(config.takeProfitPct * 100).toFixed(0)}%`);
+    assert(config.trailingStopPct > 0 && config.trailingStopPct <= 0.50, `trailing stop in range: ${(config.trailingStopPct * 100).toFixed(0)}%`);
+    assert(config.exitCheckIntervalMs > 0 && config.exitCheckIntervalMs <= 120_000, `exit checks in range: ${config.exitCheckIntervalMs / 1000}s`);
 }
 
 console.log('');
